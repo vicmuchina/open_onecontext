@@ -44,9 +44,21 @@ OpenContext elevates LLM agent context from passive token streams to a navigable
 - Branch synchronization
 - Full traceability
 
+## Prerequisites
+
+- **Python**: 3.9 or higher
+- **Git**: Initialized repository (optional but recommended)
+- **OpenCode**: For plugin integration (optional)
+
 ## Installation
 
-### Via pip
+### Via pip (Recommended)
+
+```bash
+pip install opencontext
+```
+
+### From Source (Development)
 
 ```bash
 pip install opencontext
@@ -60,9 +72,44 @@ npm install -g opencontext
 
 ### Setup OpenCode Plugin
 
+The OpenCode plugin provides smart reminders to commit your progress. It must be installed in your OpenCode plugins directory.
+
+#### Option 1: Project-level (Recommended)
+
+Install in your specific project:
+
 ```bash
-# Install the reminder plugin
+# Create the plugins directory if it doesn't exist
+mkdir -p .opencode/plugins
+
+# Copy the plugin
 cp $(opencontext plugin-path) .opencode/plugins/opencontext-reminder.js
+```
+
+#### Option 2: Global (All Projects)
+
+Install system-wide for all OpenCode projects:
+
+```bash
+# Create the global plugins directory if it doesn't exist
+mkdir -p ~/.config/opencode/plugins
+
+# Copy the plugin
+cp $(opencontext plugin-path) ~/.config/opencode/plugins/opencontext-reminder.js
+```
+
+**Note:** The `plugin` array in `opencode.json` is for npm packages only. Local plugins are automatically loaded from:
+- `~/.config/opencode/plugins/` (global)
+- `.opencode/plugins/` (project-level)
+
+#### Verify Plugin Installation
+
+```bash
+# Check if plugin is in project directory
+ls -la .opencode/plugins/opencontext-reminder.js
+
+# Or check global installation
+ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 ```
 
 ## Quick Start
@@ -127,6 +174,24 @@ Launch interactive dashboard to:
 - View evolution history
 - Search context
 - See performance metrics
+
+### 6. Verify Installation
+
+Test that everything is working:
+
+```bash
+# Check CLI is installed
+opencontext --version
+
+# Check GCC status
+opencontext status
+
+# View context
+opencontext context
+
+# Check git integration (if in a git repo)
+git log --oneline | grep "\[GCC\]"
+```
 
 ## Commands
 
@@ -221,6 +286,111 @@ opencontext delete <branch>
         └── metadata.yaml
 ```
 
+### File Format Reference
+
+#### main.md
+```markdown
+# Project: <name>
+
+## Goal
+<High-level project objective>
+
+## Milestones
+- [x] Completed task
+- [ ] Pending task
+
+## Current Status
+<Current phase and key decisions>
+
+## Notes
+<Important architectural decisions>
+```
+
+#### commit.md (Per Branch)
+```markdown
+## Branch Purpose
+<Why this branch was created>
+
+## Previous Progress Summary
+<Coarse-grained history>
+
+## Commits
+
+### <hash> - <timestamp>
+**Summary:** <What was achieved>
+**Files Modified:** <List of files>
+**Description:** <Detailed narrative>
+**Approach:** <Approach name>
+**Status:** <active|abandoned|merged>
+**Performance:** <Optional metrics>
+```
+
+#### log.md (Execution Traces)
+```markdown
+# Execution Log - Branch: <name>
+
+## <timestamp> - Turn 1
+**Observation:** <What was observed>
+**Thought:** <Agent's reasoning>
+**Action:** <Tool call made>
+**Result:** <Execution result>
+```
+
+#### metadata.yaml
+```yaml
+branch_name: <name>
+created_at: "<timestamp>"
+current_commit_hash: <hash>
+
+file_structure:
+  root:
+    - file1.py
+    - file2.py
+
+environment:
+  python_version: "3.11.0"
+  platform: "Linux"
+
+dependencies:
+  python:
+    - requests: "2.31.0"
+
+approaches:
+  - name: "Approach Name"
+    status: "active"
+    commit_hash: "abc123"
+    reason: "Why abandoned"  # if applicable
+
+user_feedback: []
+performance_metrics: {}
+```
+
+#### evolution.yaml (Project-wide)
+```yaml
+project_name: <name>
+created_at: "<timestamp>"
+
+approaches_history:
+  - name: "Approach Name"
+    timeline: "start - end"
+    description: "What was tried"
+    outcome: "active|abandoned|merged"
+    reason: "Why it was abandoned"
+    lessons: "What was learned"
+
+user_sessions:
+  - session_id: "<id>"
+    user_feedback:
+      - "Feedback text"
+    key_decisions:
+      - "Decision made"
+
+performance_trends:
+  - date: "<timestamp>"
+    task: "Task name"
+    pass_rate: "95%"
+```
+
 ## OpenCode Plugin Features
 
 The plugin provides **constant, contextual reminders**:
@@ -262,6 +432,50 @@ Approaches: 2 (1 abandoned)
 ⏸️ Session idle with 12 unlogged actions.
 💡 Run: opencontext commit '<final summary>'
 ```
+
+### Smart Commit Suggestions
+
+The plugin analyzes your actions and suggests relevant commit messages:
+
+- **File edits:** `"Updated filename.py"`
+- **Multiple files:** `"Implemented multiple file changes"`
+- **Research:** `"Researched and gathered information"`
+- **Code analysis:** `"Analyzed codebase structure"`
+
+## How the Plugin Works
+
+The OpenCode plugin hooks into OpenCode's event system:
+
+1. **Session Created** (`session.created`)
+   - Detects `.GCC/` directory
+   - Runs `opencontext context` to get current status
+   - Injects context into the system prompt
+   - Shows notification toast
+
+2. **Context Compacted** (`session.compacted`)
+   - Triggered when OpenCode truncates context
+   - Shows warning notification
+   - Adds reminder to context
+
+3. **Tool Execution** (`tool.execute.after`)
+   - Tracks every tool execution
+   - Counts toward milestone (every 5 tools)
+   - Generates smart commit suggestions
+   - Special handling for file edits
+
+4. **Message Updated** (`message.updated`)
+   - Monitors context usage
+   - Warns at 80% threshold
+   - Suggests commit before compaction
+
+5. **Session Idle** (`session.idle`)
+   - Detects when session ends
+   - Counts unlogged actions
+   - Suggests final commit
+
+6. **Session Completed** (`session.completed`)
+   - Shows summary notification
+   - Reminds to commit if actions were performed
 
 ## Evolution Tracking
 
@@ -371,6 +585,95 @@ opencontext benchmark --pass-rate 95 --speed "2x faster"
 # Happy with results
 opencontext switch main
 opencontext merge experiment-caching
+```
+
+## Troubleshooting
+
+### Plugin Not Loading
+
+**Problem:** OpenCode plugin not showing reminders
+
+**Solutions:**
+1. Verify plugin is in the correct location:
+   ```bash
+   # Project-level
+   ls .opencode/plugins/opencontext-reminder.js
+   
+   # Or global
+   ls ~/.config/opencode/plugins/opencontext-reminder.js
+   ```
+
+2. Restart OpenCode after installing the plugin
+
+3. Check OpenCode logs for plugin errors:
+   ```bash
+   opencode --print-logs
+   ```
+
+### Command Not Found
+
+**Problem:** `opencontext: command not found`
+
+**Solutions:**
+1. Verify installation:
+   ```bash
+   pip show opencontext
+   ```
+
+2. Ensure Python scripts directory is in PATH:
+   ```bash
+   # Add to ~/.bashrc or ~/.zshrc
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+3. Reinstall:
+   ```bash
+   pip install --force-reinstall opencontext
+   ```
+
+### Git Integration Not Working
+
+**Problem:** Git commits not being created
+
+**Solutions:**
+1. Ensure you're in a git repository:
+   ```bash
+   git status
+   ```
+
+2. Check if git is configured:
+   ```bash
+   git config --global user.name
+   git config --global user.email
+   ```
+
+3. Check git status manually:
+   ```bash
+   git log --oneline | grep "\[GCC\]"
+   ```
+
+### Context Not Loading
+
+**Problem:** `opencontext context` shows no data
+
+**Solutions:**
+1. Verify GCC is initialized:
+   ```bash
+   ls -la .GCC/
+   ```
+
+2. Reinitialize if needed:
+   ```bash
+   opencontext init --project-name "MyProject"
+   ```
+
+### Permission Denied
+
+**Problem:** Cannot write to .GCC/ directory
+
+**Solution:**
+```bash
+chmod -R u+w .GCC/
 ```
 
 ## API Reference
