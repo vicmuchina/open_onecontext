@@ -1,0 +1,744 @@
+# OpenContext Specification
+
+## Project Overview
+
+OpenContext is an implementation of the Git Context Controller (GCC) paper for OpenCode, providing LLM-based agents with Git-like version control for context management.
+
+**Based on:** "Git Context Controller: Manage the Context of LLM-based Agents like Git" (arXiv:2508.00031)
+
+**Key Innovation:** Elevates context from passive token streams to a navigable, versioned memory hierarchy with explicit operations: COMMIT, BRANCH, MERGE, and CONTEXT.
+
+---
+
+## Architecture
+
+### Three-Layer Design
+
+1. **Plugin Layer** (OpenCode Integration)
+   - Location: `.opencode/plugins/opencontext-reminder.js`
+   - Provides gentle, contextual reminders to commit
+   - Auto-discovers existing GCC context on session start
+   - Injects context awareness into agent's system prompt
+
+2. **CLI Tool** (Core GCC Implementation)
+   - Command: `opencontext` (alias: `ocx`)
+   - Pure Python implementation using Click
+   - File-based storage (no external dependencies)
+   - Rich TUI dashboard for visual context management
+
+3. **Storage Layer** (`.GCC/` Directory)
+   - Human-readable, git-trackable files
+   - Three-tier hierarchy: roadmap → commits → traces
+   - Evolution tracking with approach history
+
+---
+
+## File Structure
+
+```
+.GCC/
+├── main.md                      # Global project roadmap
+├── .current_branch             # Hidden file tracking active branch
+├── evolution.yaml              # Project evolution & approach tracking
+└── branches/
+    ├── main/
+    │   ├── commit.md           # Commit summaries with 3-block format
+    │   ├── log.md              # Fine-grained OTA execution traces
+    │   └── metadata.yaml       # File structure, env, deps
+    └── feature-branch/
+        ├── commit.md
+        ├── log.md
+        └── metadata.yaml
+```
+
+### File Formats
+
+#### main.md
+Global roadmap shared across all branches:
+
+```markdown
+# Project: <name>
+
+## Goal
+<High-level project objective>
+
+## Milestones
+- [x] Initial setup completed
+- [ ] Implement core feature X
+- [ ] Add test coverage
+- [ ] Deploy to production
+
+## Current Status
+<Current phase and key decisions>
+
+## Notes
+<Important architectural decisions, constraints>
+```
+
+#### commit.md
+Structured commit log per branch (3-block format from paper):
+
+```markdown
+## Branch Purpose
+<Reiteration of overall project goal + specific rationale for this branch>
+
+## Previous Progress Summary
+<Coarse-grained summary combining all previous commits>
+
+## Commits
+
+### <hash> - <timestamp>
+**Summary:** <Agent-provided commit message>
+**Files Modified:** <list of changed files>
+**Description:** <Detailed narrative of what was achieved>
+**Approach:** <Name of approach being tested>
+**Status:** <success|partial|abandoned>
+**Performance:** <Optional metrics>
+
+### <hash> - <timestamp>
+...
+```
+
+#### log.md
+Fine-grained execution traces (OTA cycles):
+
+```markdown
+# Execution Log - Branch: <name>
+
+## <timestamp> - Turn 1
+**Observation:** <What the agent observed>
+**Thought:** <Agent's reasoning>
+**Action:** <Tool call made>
+**Result:** <Tool execution result>
+
+## <timestamp> - Turn 2
+...
+```
+
+#### metadata.yaml
+Structured branch metadata:
+
+```yaml
+branch_name: feature-x
+created_at: "2025-02-11T22:30:00Z"
+current_commit_hash: abc123
+
+file_structure:
+  root:
+    - src/
+      - main.py
+      - utils.py
+    - tests/
+      - test_main.py
+    - README.md
+    - requirements.txt
+
+environment:
+  python_version: "3.11.4"
+  node_version: "20.11.0"
+  platform: "linux"
+
+dependencies:
+  python:
+    - requests: "2.31.0"
+    - click: "8.1.7"
+  node:
+    - typescript: "5.3.0"
+
+approaches:
+  - name: "RAG-based memory"
+    status: "abandoned"
+    reason: "Too fragile, computationally expensive"
+    commit_hash: "def456"
+    performance_note: "Slower resolution, lower success rate"
+    lessons_learned: "Prefer summary-based compression for long tasks"
+    
+  - name: "Summary-based compression"
+    status: "active"
+    reason: "More reliable for long-horizon tasks"
+    commit_hash: "ghi789"
+    performance_note: "Faster, better accuracy"
+
+user_feedback:
+  - timestamp: "2025-02-11T23:00:00Z"
+    feedback: "The RAG approach was too slow"
+    action_taken: "Switched to summary-based approach"
+
+performance_metrics:
+  last_benchmark: "2025-02-11T23:30:00Z"
+  test_pass_rate: "85%"
+  average_task_time: "45s"
+```
+
+#### evolution.yaml
+Project-wide evolution tracking:
+
+```yaml
+project_name: MyProject
+created_at: "2025-02-11T22:00:00Z"
+
+approaches_history:
+  - name: "Initial Implementation"
+    timeline: "2025-02-11 - 2025-02-11"
+    description: "Basic setup and exploration"
+    commits: ["abc123", "def456"]
+    outcome: "Successful baseline"
+    
+  - name: "RAG Memory Experiment"
+    timeline: "2025-02-11 - 2025-02-11"
+    description: "Prototype retriever-augmented memory system"
+    commits: ["ghi789", "jkl012"]
+    outcome: "abandoned"
+    reason: "Too fragile, computationally expensive, underperformed"
+    lessons: "Simple solutions often outperform complex ones"
+
+user_sessions:
+  - session_id: "sess_001"
+    started: "2025-02-11T22:00:00Z"
+    ended: "2025-02-11T23:30:00Z"
+    key_decisions:
+      - "Switched from RAG to summary-based approach"
+    user_feedback:
+      - "The RAG approach was too slow for our needs"
+
+performance_trends:
+  - date: "2025-02-11"
+    metric: "task_resolution_rate"
+    value: "40.7%"
+    comparison: "+29% vs baseline"
+```
+
+---
+
+## CLI Commands
+
+### Core GCC Commands
+
+#### `opencontext init`
+Initialize GCC in current directory:
+```bash
+opencontext init [--project-name <name>] [--goal <description>]
+```
+Creates `.GCC/` structure with `main.md` and `branches/main/`.
+
+#### `opencontext commit <summary>`
+Create a checkpoint:
+```bash
+opencontext commit "Implemented user authentication module"
+```
+Actions:
+1. Updates `commit.md` with 3-block format
+2. Appends to `log.md` since last commit
+3. Updates `metadata.yaml` (file structure, env)
+4. Updates `main.md` if roadmap changed
+5. Creates git commit with message: `[GCC] <summary>`
+
+#### `opencontext branch <name>`
+Create isolated exploration workspace:
+```bash
+opencontext branch experiment-rag-memory
+```
+Actions:
+1. Creates new branch directory
+2. Copies current `metadata.yaml` as baseline
+3. Initializes empty `log.md`
+4. Creates `commit.md` with branch purpose (prompts agent)
+5. Updates `.current_branch`
+
+#### `opencontext merge <branch>`
+Integrate branch results:
+```bash
+opencontext merge experiment-rag-memory
+```
+Actions:
+1. Calls `opencontext context --branch <branch>`
+2. Updates `main.md` with branch outcome
+3. Merges `commit.md` entries with origin tags
+4. Merges `log.md` with branch markers
+5. Updates `evolution.yaml` with approach results
+6. Creates git commit: `[GCC] Merge branch '<branch>'`
+7. Optionally deletes merged branch
+
+#### `opencontext context [options]`
+Retrieve context at varying granularity:
+
+```bash
+# Show git status-style overview
+opencontext context
+
+# Show specific branch details
+opencontext context --branch main
+
+# Show specific commit
+opencontext context --commit abc123
+
+# Show execution log (with scroll)
+opencontext context --log [--lines 50]
+
+# Show metadata segment
+opencontext context --metadata file_structure
+
+# Search across all context
+opencontext context --search "authentication"
+
+# Export context as JSON
+opencontext context --export --format json
+```
+
+### Utility Commands
+
+#### `opencontext status`
+Quick status check:
+```bash
+opencontext status
+# Output:
+# Current branch: main
+# Last commit: abc123 - "Setup project structure"
+# Unlogged turns: 15
+# Context size: 45KB
+# Reminder: Consider committing recent progress
+```
+
+#### `opencontext switch <branch>`
+Switch active branch:
+```bash
+opencontext switch feature-auth
+```
+
+#### `opencontext list`
+List all branches:
+```bash
+opencontext list
+# Output:
+# * main (active)
+#   experiment-rag-memory [abandoned]
+#   feature-auth [3 commits ahead]
+```
+
+#### `opencontext delete <branch>`
+Delete branch (with confirmation):
+```bash
+opencontext delete experiment-rag-memory
+```
+
+### TUI Dashboard
+
+#### `opencontext tui`
+Launch rich TUI dashboard:
+```bash
+opencontext tui [--theme dark|light]
+```
+
+**Dashboard Views:**
+1. **Overview**: Project status, active branch, recent commits
+2. **Branches**: Visual branch tree with merge status
+3. **Commits**: Timeline with filtering and search
+4. **Evolution**: Approach history with performance metrics
+5. **Log**: Real-time execution trace viewer
+
+**Navigation:**
+- `Tab` / `Shift+Tab`: Switch panels
+- `↑↓`: Navigate lists
+- `Enter`: View details
+- `/`: Search
+- `q`: Quit
+
+---
+
+## OpenCode Plugin
+
+### Location
+`.opencode/plugins/opencontext-reminder.js` (project-level)
+`~/.config/opencode/plugins/opencontext-reminder.js` (global)
+
+### Reminder Triggers (Combination of B and C)
+
+#### 1. Context Compaction Reminder (Critical)
+```javascript
+"session.compacted": async (input, output) => {
+  await client.app.toast({
+    message: "⚠️ Context compacted! Important details may be lost.\n💡 Run: opencontext commit '<what was achieved>'",
+    type: "warning",
+    timeout: 10000
+  });
+}
+```
+
+#### 2. Tool Execution Milestones (Every 5 tools)
+```javascript
+let toolCount = 0;
+"tool.execute.after": async (input, output) => {
+  toolCount++;
+  if (toolCount % 5 === 0) {
+    const suggestion = await generateCommitSuggestion(input, output);
+    await client.app.toast({
+      message: `🎯 ${toolCount} actions completed. Suggestion:\nopencontext commit "${suggestion}"`,
+      type: "info"
+    });
+  }
+}
+```
+
+#### 3. Context Usage Stats
+```javascript
+"message.updated": async (input) => {
+  const contextStats = await getContextStats();
+  if (contextStats.usagePercent > 80) {
+    await client.app.toast({
+      message: `📊 Context: ${contextStats.usagePercent}% full\n💡 Consider: opencontext commit '<summary>'`,
+      type: "info"
+    });
+  }
+}
+```
+
+#### 4. Session Start Auto-Discovery
+```javascript
+"session.created": async () => {
+  if (fs.existsSync(".GCC/")) {
+    const context = await exec("opencontext context");
+    const branch = await exec("opencontext status --branch-only");
+    
+    // Prepend to system context
+    return {
+      context: `## GCC Project Context
+Active Branch: ${branch}
+${context}
+
+💡 Available commands: opencontext commit, branch, merge, context
+📊 Run 'opencontext tui' for visual dashboard
+`
+    };
+  }
+}
+```
+
+#### 5. Idle Session Suggestion
+```javascript
+"session.idle": async () => {
+  const unloggedTurns = await countUnloggedTurns();
+  if (unloggedTurns > 10) {
+    await client.app.toast({
+      message: `⏸️ Session idle with ${unloggedTurns} unlogged actions.\n💡 Run: opencontext commit '<final summary>'`,
+      type: "info"
+    });
+  }
+}
+```
+
+### Smart Commit Suggestions
+
+The plugin analyzes recent actions to suggest commit messages:
+
+```javascript
+async function generateCommitSuggestion(input, output) {
+  const recentTools = getRecentTools(5);
+  const filesModified = getModifiedFiles();
+  
+  if (recentTools.includes("edit") && filesModified.length > 0) {
+    return `Updated ${filesModified.join(", ")}`;
+  }
+  if (recentTools.includes("bash") && recentTools.includes("test")) {
+    return "Implemented and tested feature";
+  }
+  if (recentTools.filter(t => t === "webfetch").length > 0) {
+    return "Researched and gathered information";
+  }
+  return "Checkpoint progress";
+}
+```
+
+---
+
+## Evolution Tracking System
+
+### Approach Documentation
+
+When abandoning an approach:
+
+```bash
+opencontext commit "Abandoned RAG-based memory" \
+  --approach "RAG Memory" \
+  --status abandoned \
+  --reason "Too fragile and computationally expensive" \
+  --performance "40% slower, lower accuracy"
+```
+
+Updates `metadata.yaml` with:
+```yaml
+approaches:
+  - name: "RAG-based memory"
+    status: "abandoned"
+    reason: "Too fragile, computationally expensive"
+    commit_hash: "abc123"
+    performance_note: "40% slower, lower accuracy"
+    lessons_learned: "Simple summary-based approach more reliable"
+```
+
+### User Feedback Integration
+
+```bash
+# User provides feedback
+opencontext feedback "The RAG approach is too slow for production"
+
+# Stored in evolution.yaml
+user_sessions:
+  - session_id: "current"
+    user_feedback:
+      - timestamp: "..."
+        feedback: "The RAG approach is too slow for production"
+        context: "experiment-rag-memory branch"
+```
+
+### Performance Metrics
+
+```bash
+# Record benchmark results
+opencontext benchmark \
+  --task "SWE-Bench-Lite" \
+  --pass-rate 40.7 \
+  --baseline 11.7 \
+  --notes "GCC vs non-GCC comparison"
+```
+
+---
+
+## Git Integration
+
+### Automatic Git Commits
+
+Every `opencontext commit` creates a corresponding git commit:
+
+```bash
+# GCC command
+opencontext commit "Implemented auth module"
+
+# Creates git commit
+# Message: [GCC] Implemented auth module
+# Includes: All modified files + .GCC/ directory
+```
+
+### Git Tagging
+
+```bash
+opencontext tag milestone-v1
+# Creates git tag: gcc-milestone-v1
+```
+
+### Branch Synchronization
+
+```bash
+opencontext branch feature-x
+# Creates GCC branch AND git branch: gcc-feature-x
+```
+
+---
+
+## Installation
+
+### Via pip
+
+```bash
+pip install opencontext
+```
+
+### Via npm (wrapper)
+
+```bash
+npm install -g opencontext
+```
+
+### Setup
+
+```bash
+# Initialize in project
+opencontext init --project-name "MyProject"
+
+# Install OpenCode plugin
+cp opencontext/plugins/opencontext-reminder.js .opencode/plugins/
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Starting a New Project
+
+```bash
+# Initialize
+opencontext init --project-name "MyApp" --goal "Build a web scraper"
+
+# Agent starts working...
+# Plugin shows: "📊 Context: 10% full"
+
+# After implementing core feature
+opencontext commit "Implemented basic scraping logic"
+
+# Plugin shows: "🎯 5 actions completed. Suggestion: opencontext commit '...'"
+
+# Try alternative approach
+opencontext branch experiment-async-scraper
+
+# Work on alternative...
+
+# Abandon approach
+opencontext commit "Abandoned async approach" \
+  --approach "Async Scraper" \
+  --status abandoned \
+  --reason "Complexity outweighs benefits"
+
+# Switch back to main
+opencontext switch main
+opencontext merge experiment-async-scraper
+
+# View evolution
+opencontext tui  # Navigate to Evolution tab
+```
+
+### Example 2: Session Handoff
+
+```bash
+# User ends session
+opencontext commit "Session checkpoint - debugging auth issue"
+
+# New session starts...
+# Plugin auto-loads context:
+# "## GCC Project Context
+#  Active Branch: main
+#  Last commit: debugging auth issue
+#  ..."
+
+# Agent continues seamlessly
+opencontext context --log
+# Shows previous debugging attempts
+```
+
+---
+
+## Configuration
+
+### Global Config
+`~/.config/opencontext/config.yaml`:
+
+```yaml
+defaults:
+  auto_git_commit: true
+  reminder_frequency: 5  # Every N tool executions
+  context_warning_threshold: 80  # Percentage
+  tui:
+    theme: dark
+    refresh_rate: 1s
+
+reminders:
+  on_compaction: true
+  on_tool_milestones: true
+  on_context_usage: true
+  on_session_idle: true
+```
+
+### Project Config
+`.GCC/config.yaml`:
+
+```yaml
+project:
+  name: "MyProject"
+  goal: "Build a web scraper"
+  
+git:
+  auto_commit: true
+  commit_prefix: "[GCC]"
+  
+metadata:
+  auto_track_dependencies: true
+  auto_track_file_structure: true
+  track_performance: true
+```
+
+---
+
+## API Reference
+
+### Python API
+
+```python
+from opencontext import GCC
+
+gcc = GCC()
+
+# Initialize
+gcc.init(project_name="MyProject", goal="Build a scraper")
+
+# Commit
+gcc.commit("Implemented auth module")
+
+# Branch
+gcc.branch("experiment-async")
+
+# Merge
+gcc.merge("experiment-async")
+
+# Context
+context = gcc.context()
+branch_context = gcc.context(branch="main")
+
+# TUI
+gcc.tui()
+```
+
+### JavaScript Plugin API
+
+```javascript
+import { OpenContextPlugin } from 'opencontext/plugin';
+
+const plugin = new OpenContextPlugin({
+  reminderFrequency: 5,
+  showContextStats: true
+});
+
+await plugin.install('.opencode/plugins/');
+```
+
+---
+
+## Testing Strategy
+
+1. **Unit Tests**: Core GCC operations (commit, branch, merge)
+2. **Integration Tests**: Git integration, file I/O
+3. **E2E Tests**: Full workflow from init to merge
+4. **Plugin Tests**: OpenCode hook integration
+5. **TUI Tests**: Rich dashboard navigation
+
+---
+
+## Future Enhancements
+
+1. **Cloud Sync**: Optional cloud backup of .GCC/
+2. **Multi-Agent**: Support for team collaboration
+3. **AI-Powered Summaries**: LLM-generated commit messages
+4. **Visual Diff**: TUI diff view between commits
+5. **Export Formats**: PDF, HTML reports of evolution
+
+---
+
+## Success Metrics
+
+Per the GCC paper:
+- **Task Resolution**: Target 40%+ improvement on SWE-Bench-like tasks
+- **Context Efficiency**: 80%+ reduction in repeated explanations
+- **Developer Satisfaction**: Seamless session handoff experience
+- **Adoption**: Agent spontaneously commits without prompting
+
+---
+
+## References
+
+1. Wu, J. et al. "Git Context Controller: Manage the Context of LLM-based Agents like Git" arXiv:2508.00031 (2025)
+2. OpenCode Plugin System: https://opencode.ai/docs/plugins/
+3. Rich TUI Library: https://rich.readthedocs.io/
+4. Click CLI Framework: https://click.palletsprojects.com/
+
+---
+
+## License
+
+MIT License - See LICENSE file

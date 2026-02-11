@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opencontext"
+version = "0.1.0"
+description = "Git Context Controller for OpenCode - Version control for LLM agent context"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "OpenContext Contributors"},
+]
+keywords = [
+    "llm",
+    "agent",
+    "context",
+    "git",
+    "version-control",
+    "opencode",
+    "gcc",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Version Control",
+]
+dependencies = [
+    "click>=8.0.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0",
+    "gitpython>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+opencontext = "opencontext.cli.main:cli"
+ocx = "opencontext.cli.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/vicmuchina/open_onecontext"
+Documentation = "https://github.com/vicmuchina/open_onecontext#readme"
+Repository = "https://github.com/vicmuchina/open_onecontext"
+Issues = "https://github.com/vicmuchina/open_onecontext/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["opencontext"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
