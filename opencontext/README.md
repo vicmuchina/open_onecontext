@@ -122,14 +122,20 @@ cp $(opencontext plugin-path) ~/.config/opencode/plugins/opencontext-reminder.js
 - `~/.config/opencode/plugins/` (global)
 - `.opencode/plugins/` (project-level)
 
-#### Verify Plugin Installation
+#### Verify Installation
 
 ```bash
-# Check if plugin is in project directory
+# Check CLI
+opencontext --version
+
+# Check plugin (project-level)
 ls -la .opencode/plugins/opencontext-reminder.js
 
-# Or check global installation
+# Check plugin (global)
 ls -la ~/.config/opencode/plugins/opencontext-reminder.js
+
+# Check config file
+grep -A 5 '"opencontext"' ~/.config/opencode/opencode.json
 ```
 
 ## Quick Start
