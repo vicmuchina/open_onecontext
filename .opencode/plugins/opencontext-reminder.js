@@ -102,19 +102,16 @@ async function getGCCContext(directory) {
  * Main plugin export
  */
 export const OpenContextPlugin = async ({ project, client, directory }) => {
-  console.log("[OpenContext] Plugin initialized");
-  
+  // Silent initialization - no console output to avoid MCP interference
   return {
     /**
      * Auto-discover and inject GCC context on session start
      */
     "session.created": async () => {
       if (!isGCCInitialized(directory)) {
-        console.log("[OpenContext] GCC not initialized in this project");
+        // Silent - no GCC in this project
         return {};
       }
-      
-      console.log("[OpenContext] GCC detected, loading context...");
       
       const gccInfo = await getGCCContext(directory);
       if (!gccInfo) {
@@ -159,8 +156,7 @@ Last Commit: ${lastCommit}
     "session.compacted": async (input, output) => {
       if (!isGCCInitialized(directory)) return;
       
-      console.log("[OpenContext] Context compaction detected!");
-      
+      // Context compaction detected - warn user
       await client.app.toast({
         message: `⚠️ Context Compacted!\nImportant details may be lost.\n\n💡 Run: opencontext commit "<what was achieved>"`,
         type: "warning",
@@ -246,8 +242,6 @@ Last Commit: ${lastCommit}
      */
     "session.completed": async () => {
       if (!isGCCInitialized(directory)) return;
-      
-      console.log(`[OpenContext] Session completed. ${toolExecutionCount} tool executions.`);
       
       if (toolExecutionCount > 5) {
         await client.app.toast({
