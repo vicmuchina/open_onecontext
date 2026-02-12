@@ -22,6 +22,9 @@ The installer will:
 2. ✅ **OpenCode Plugin** - Installed globally in `~/.config/opencode/plugins/`
 3. ✅ **OpenContext Skill** - Installed in `~/.config/opencode/skills/opencontext/`
 4. ✅ **Templates** - Stored in `~/.local/share/opencontext/`
+5. ✅ **Config Update** - Adds OpenContext metadata to `~/.config/opencode/opencode.json`
+
+**Note:** The OpenCode config file is automatically updated to include OpenContext metadata under `_installed_plugins`. This helps track what's installed but doesn't affect functionality - plugins are auto-loaded from the plugins directory regardless.
 
 ## Installation Locations
 
@@ -31,8 +34,28 @@ After installation, you'll find:
 ~/.local/share/opencontext/          # Source code and templates
 ~/.config/opencode/plugins/          # OpenCode plugin
 ~/.config/opencode/skills/opencontext/  # OpenContext skill
+~/.config/opencode/opencode.json     # Updated with OpenContext metadata
 ~/.local/bin/opencontext             # CLI executable (if in PATH)
 ```
+
+### Config File Update
+
+The installer adds this to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "_installed_plugins": {
+    "opencontext": {
+      "version": "0.1.0",
+      "installed_at": "2025-02-12T16:00:00Z",
+      "plugin_path": "~/.config/opencode/plugins/opencontext-reminder.js",
+      "skill_path": "~/.config/opencode/skills/opencontext/SKILL.md"
+    }
+  }
+}
+```
+
+This is purely for tracking - OpenCode automatically loads plugins from the plugins directory.
 
 ## Alternative Installation Methods
 
