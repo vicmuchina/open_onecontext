@@ -303,5 +303,62 @@ def plugin_path():
         raise click.Abort()
 
 
+@cli.command('setup-opencode')
+@click.option('--global', 'global_install', is_flag=True, help='Install globally for all projects')
+def setup_opencode(global_install: bool):
+    """Setup OpenCode integration (plugin and skill).
+    
+    Installs the OpenCode plugin and skill for automatic context management.
+    """
+    import shutil
+    import opencontext
+    
+    # Get plugin and skill source paths
+    package_dir = Path(opencontext.__file__).parent
+    plugin_source = package_dir / "plugin" / "opencontext-reminder.js"
+    skill_source = package_dir.parent / "docs" / "SKILL.md"
+    
+    if not plugin_source.exists():
+        console.print("[red]Error: Plugin source not found[/red]")
+        raise click.Abort()
+    
+    try:
+        if global_install:
+            # Install globally
+            opencode_config = Path.home() / ".config" / "opencode"
+            
+            # Plugin
+            plugin_dir = opencode_config / "plugins"
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(plugin_source, plugin_dir / "opencontext-reminder.js")
+            console.print(f"[green]✓ Plugin installed globally: {plugin_dir}[/green]")
+            
+            # Skill
+            skill_dir = opencode_config / "skills" / "opencontext"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            if skill_source.exists():
+                shutil.copy2(skill_source, skill_dir / "SKILL.md")
+                console.print(f"[green]✓ Skill installed globally: {skill_dir}[/green]")
+        else:
+            # Install in current directory (project-level)
+            opencode_dir = Path.cwd() / ".opencode"
+            
+            # Plugin
+            plugin_dir = opencode_dir / "plugins"
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(plugin_source, plugin_dir / "opencontext-reminder.js")
+            console.print(f"[green]✓ Plugin installed in project: {plugin_dir}[/green]")
+            
+            console.print("\n[yellow]Note:[/yellow] For global installation (all projects), run:")
+            console.print("  opencontext setup-opencode --global")
+        
+        console.print("\n[blue]OpenCode integration ready![/blue]")
+        console.print("The plugin will automatically remind you to commit at milestones.")
+        
+    except Exception as e:
+        console.print(f"[red]Error setting up OpenCode integration: {e}[/red]")
+        raise click.Abort()
+
+
 if __name__ == '__main__':
     cli()

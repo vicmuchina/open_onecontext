@@ -52,22 +52,42 @@ OpenContext elevates LLM agent context from passive token streams to a navigable
 
 ## Installation
 
-### Via pip (Recommended)
+### One-Command Install (Recommended)
+
+Install everything (CLI, plugin, and skill) with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+```
+
+Or with `wget`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+```
+
+This will:
+- ✅ Install the `opencontext` CLI tool
+- ✅ Install the OpenCode plugin (global)
+- ✅ Install the OpenContext skill
+- ✅ Set up all necessary directories
+
+### Via pip
 
 ```bash
 pip install opencontext
+
+# Then setup OpenCode integration
+opencontext setup-opencode --global
 ```
 
-### From Source (Development)
+### From Source
 
 ```bash
-pip install opencontext
-```
-
-### Via npm (wrapper)
-
-```bash
-npm install -g opencontext
+git clone https://github.com/vicmuchina/open_onecontext.git
+cd open_onecontext/opencontext
+pip install -e .
+opencontext setup-opencode --global
 ```
 
 ### Setup OpenCode Plugin
@@ -114,7 +134,30 @@ ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 
 ## Quick Start
 
+After running the one-command install above, you're ready to go:
+
 ### 1. Initialize Project
+
+Navigate to your project and initialize GCC:
+
+```bash
+cd /path/to/your/project
+opencontext init --project-name "MyApp" --goal "Build a web scraper"
+```
+
+This creates a `.GCC/` directory with:
+- `main.md` - Project roadmap
+- `branches/main/` - Main branch with commit.md, log.md, metadata.yaml
+
+### 2. Start OpenCode
+
+```bash
+opencode
+```
+
+The plugin automatically loads and will remind you to commit at milestones.
+
+### 3. Daily Workflow
 
 ```bash
 opencontext init --project-name "MyApp" --goal "Build a web scraper"

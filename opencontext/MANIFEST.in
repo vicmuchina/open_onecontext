@@ -1,0 +1,8 @@
+include opencontext/plugin/opencontext-reminder.js
+include opencontext/docs/SKILL.md
+include opencontext/docs/papers/*.md
+include README.md
+include LICENSE
+recursive-include opencontext *.py
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
