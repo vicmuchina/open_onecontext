@@ -108,18 +108,18 @@ cp "${INSTALL_DIR}/opencontext/docs/SKILL.md" \
 
 echo -e "${GREEN}✓ Skill installed${NC}"
 
-# Update OpenCode config file to include OpenContext metadata
+# Update OpenCode config file to add OpenContext to plugin array
 OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"
 if [ -f "$OPENCODE_CONFIG" ]; then
     echo ""
     echo -e "${YELLOW}📝 Updating OpenCode configuration...${NC}"
     
-    # Check if OpenContext is already in the config
+    # Check if OpenContext is already in the plugin array
     if ! grep -q '"opencontext"' "$OPENCODE_CONFIG" 2>/dev/null; then
         # Create a backup
         cp "$OPENCODE_CONFIG" "${OPENCODE_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)"
         
-        # Add OpenContext section using Python (safer than sed for JSON)
+        # Add OpenContext to plugin array using Python
         python3 << EOF
 import json
 import sys
@@ -128,30 +128,26 @@ try:
     with open('$OPENCODE_CONFIG', 'r') as f:
         config = json.load(f)
     
-    # Add OpenContext metadata
-    if '_installed_plugins' not in config:
-        config['_installed_plugins'] = {}
+    # Add OpenContext to plugin array if not already present
+    if 'plugin' not in config:
+        config['plugin'] = []
     
-    config['_installed_plugins']['opencontext'] = {
-        'version': '0.1.0',
-        'installed_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
-        'plugin_path': '~/.config/opencode/plugins/opencontext-reminder.js',
-        'skill_path': '~/.config/opencode/skills/opencontext/SKILL.md'
-    }
+    if 'opencontext' not in config['plugin']:
+        config['plugin'].append('opencontext')
     
     with open('$OPENCODE_CONFIG', 'w') as f:
         json.dump(config, f, indent=2)
     
-    print("✓ OpenCode config updated with OpenContext metadata")
+    print("✓ OpenContext added to OpenCode plugin list")
 except Exception as e:
     print(f"⚠️  Could not update config: {e}", file=sys.stderr)
     sys.exit(1)
 EOF
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✓ OpenContext metadata added to OpenCode config${NC}"
+            echo -e "${GREEN}✓ OpenContext added to plugin array${NC}"
         fi
     else
-        echo -e "${GREEN}✓ OpenContext already in config${NC}"
+        echo -e "${GREEN}✓ OpenContext already in plugin list${NC}"
     fi
 fi
 
