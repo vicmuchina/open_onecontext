@@ -1,60 +1,28 @@
 /**
  * OpenContext Plugin for OpenCode
- * 
- * Provides gentle, contextual reminders to use GCC commands
- * Based on the Git Context Controller (GCC) paper
+ *
+ * Provides contextual reminders for OpenContext/GCC usage.
  */
 
-import { readFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 
-// Configuration
 const CONFIG = {
-  reminderFrequency: 5,  // Every N tool executions
-  contextWarningThreshold: 80,  // Percentage
+  reminderFrequency: 5,
+  contextWarningThreshold: 80,
   gccDir: ".GCC",
+  logService: "opencontext.plugin",
+  contextCacheMs: 15000,
 };
 
-// State tracking
-let toolExecutionCount = 0;
-let lastReminderTime = 0;
-
-/**
- * Generate a commit suggestion based on recent tool usage
- */
-function generateCommitSuggestion(tool, input, output) {
-  const recentTools = getRecentTools(5);
-  
-  // Check for file edits
-  if (tool === "edit" && input.filePath) {
-    return `Updated ${input.filePath.split('/').pop()}`;
-  }
-  
-  // Check for multiple file operations
-  if (recentTools.filter(t => t === "edit").length >= 2) {
-    return "Implemented multiple file changes";
-  }
-  
-  // Check for bash + test pattern
-  if (recentTools.includes("bash") && recentTools.includes("bash")) {
-    return "Implemented and validated changes";
-  }
-  
-  // Check for research pattern
-  if (recentTools.filter(t => t === "webfetch" || t === "websearch").length > 0) {
-    return "Researched and gathered information";
-  }
-  
-  // Check for read-heavy pattern (understanding code)
-  if (recentTools.filter(t => t === "read").length >= 3) {
-    return "Analyzed codebase structure";
-  }
-  
-  return "Checkpoint progress";
-}
-
-// Track recent tools
 const recentTools = [];
+let toolExecutionCount = 0;
+let lastContextWarningPercent = 0;
+let messageUpdateCount = 0;
+let contextCache = {
+  fetchedAt: 0,
+  data: null,
+};
 
 function getRecentTools(n) {
   return recentTools.slice(-n);
@@ -62,195 +30,277 @@ function getRecentTools(n) {
 
 function addRecentTool(tool) {
   recentTools.push(tool);
-  if (recentTools.length > 10) {
-    recentTools.shift();
-  }
+  if (recentTools.length > 10) recentTools.shift();
 }
 
-/**
- * Check if GCC is initialized in the project
- */
 function isGCCInitialized(directory) {
   return existsSync(join(directory, CONFIG.gccDir));
 }
 
-/**
- * Get GCC context for injection
- */
-async function getGCCContext(directory) {
+function parseBranchFromStatus(statusText) {
+  const match = statusText.match(/Current branch:\s+(.+)/);
+  return match ? match[1].trim() : "unknown";
+}
+
+function parseLastCommitFromStatus(statusText) {
+  const match = statusText.match(/Last commit:\s+(.+)/);
+  return match ? match[1].trim() : "none";
+}
+
+function toToolName(toolLike) {
+  if (typeof toolLike === "string") return toolLike;
+  if (toolLike && typeof toolLike.id === "string") return toolLike.id;
+  if (toolLike && typeof toolLike.name === "string") return toolLike.name;
+  return "unknown";
+}
+
+function generateCommitSuggestion(tool, args) {
+  const recent = getRecentTools(5);
+
+  if (tool === "edit" && args?.filePath) {
+    return `Updated ${args.filePath.split("/").pop()}`;
+  }
+  if (recent.filter((t) => t === "edit").length >= 2) {
+    return "Implemented multiple file changes";
+  }
+  if (recent.includes("bash")) {
+    return "Implemented and validated changes";
+  }
+  if (recent.some((t) => t === "webfetch" || t === "websearch")) {
+    return "Researched and gathered information";
+  }
+  if (recent.filter((t) => t === "read").length >= 3) {
+    return "Analyzed codebase structure";
+  }
+  return "Checkpoint progress";
+}
+
+async function log(client, level, message, extra = {}) {
+  try {
+    await client.app.log({
+      body: {
+        service: CONFIG.logService,
+        level,
+        message,
+        extra,
+      },
+    });
+  } catch {
+    // Ignore logging failures to keep plugin non-blocking.
+  }
+}
+
+async function toast(client, payload) {
+  try {
+    const variant = payload.type ?? "info";
+    const duration = payload.timeout ?? 5000;
+    await client.tui.showToast({
+      body: {
+        title: payload.title,
+        message: payload.message,
+        variant,
+        duration,
+      },
+    });
+  } catch (error) {
+    await log(client, "debug", "toast unavailable", {
+      error: error?.message ?? String(error),
+    });
+  }
+}
+
+async function getGCCContext(directory, client) {
   try {
     const { execSync } = await import("child_process");
-    const context = execSync("opencontext context", { 
+    const context = execSync("opencontext context", {
       cwd: directory,
       encoding: "utf-8",
-      timeout: 5000 
+      timeout: 5000,
     });
-    
     const status = execSync("opencontext status", {
       cwd: directory,
       encoding: "utf-8",
-      timeout: 5000
+      timeout: 5000,
     });
-    
     return { context, status };
-  } catch (e) {
+  } catch (error) {
+    await log(client, "warn", "opencontext CLI lookup failed", {
+      directory,
+      error: error?.message ?? String(error),
+    });
     return null;
   }
 }
 
-/**
- * Main plugin export
- */
-export const OpenContextPlugin = async ({ project, client, directory }) => {
-  // Silent initialization - no console output to avoid MCP interference
+async function getCachedGCCContext(directory, client) {
+  if (
+    contextCache.data &&
+    Date.now() - contextCache.fetchedAt < CONFIG.contextCacheMs
+  ) {
+    return contextCache.data;
+  }
+  const data = await getGCCContext(directory, client);
+  if (data) {
+    contextCache = {
+      fetchedAt: Date.now(),
+      data,
+    };
+  }
+  return data;
+}
+
+export const OpenContextPlugin = async ({ client, directory }) => {
+  await log(client, "info", "plugin initialized", { directory });
+
   return {
-    /**
-     * Auto-discover and inject GCC context on session start
-     */
-    "session.created": async () => {
-      if (!isGCCInitialized(directory)) {
-        // Silent - no GCC in this project
-        return {};
-      }
-      
-      const gccInfo = await getGCCContext(directory);
-      if (!gccInfo) {
-        return {};
-      }
-      
-      // Parse current branch from status
-      const branchMatch = gccInfo.status.match(/Current branch: (\w+)/);
-      const branch = branchMatch ? branchMatch[1] : "unknown";
-      
-      // Parse last commit
-      const commitMatch = gccInfo.status.match(/Last commit: (.+)/);
-      const lastCommit = commitMatch ? commitMatch[1] : "none";
-      
-      // Show notification
-      await client.app.toast({
-        message: `📦 GCC Context Loaded\nBranch: ${branch}\nLast: ${lastCommit.substring(0, 40)}...`,
-        type: "info",
-        timeout: 8000
-      });
-      
-      // Inject context into system prompt
-      return {
-        context: `## 📦 OpenContext (GCC) Active
-Current Branch: ${branch}
-Last Commit: ${lastCommit}
+    event: async ({ event }) => {
+      if (event.type === "session.created") {
+        await log(client, "debug", "event session.created");
+        if (!isGCCInitialized(directory)) {
+          await log(client, "debug", "gcc not initialized", { directory });
+          return;
+        }
 
-💡 Available commands:
-• opencontext commit "<summary>" - Checkpoint progress
-• opencontext branch "<name>" - Explore alternative
-• opencontext merge "<branch>" - Integrate results
-• opencontext context - View project status
-• opencontext tui - Launch dashboard
+        const gccInfo = await getCachedGCCContext(directory, client);
+        if (!gccInfo) return;
 
-📊 Context automatically tracked. Commit at milestones!`
-      };
-    },
-    
-    /**
-     * Critical: Warn when context is compacted
-     */
-    "session.compacted": async (input, output) => {
-      if (!isGCCInitialized(directory)) return;
-      
-      // Context compaction detected - warn user
-      await client.app.toast({
-        message: `⚠️ Context Compacted!\nImportant details may be lost.\n\n💡 Run: opencontext commit "<what was achieved>"`,
-        type: "warning",
-        timeout: 15000
-      });
-      
-      // Also add to context
-      output.context = output.context || [];
-      output.context.push(`⚠️ CONTEXT WAS COMPACTED! Consider committing recent progress with: opencontext commit "summary"`);
-    },
-    
-    /**
-     * Milestone reminder every N tool executions
-     */
-    "tool.execute.after": async (input, output) => {
-      if (!isGCCInitialized(directory)) return;
-      
-      const tool = input.tool;
-      addRecentTool(tool);
-      toolExecutionCount++;
-      
-      // Remind every N tool executions
-      if (toolExecutionCount % CONFIG.reminderFrequency === 0) {
-        const suggestion = generateCommitSuggestion(tool, input.args, output);
-        
-        await client.app.toast({
-          message: `🎯 Milestone Reached!\n${toolExecutionCount} actions completed.\n\n💡 Suggestion:\nopencontext commit "${suggestion}"`,
+        const branch = parseBranchFromStatus(gccInfo.status);
+        const lastCommit = parseLastCommitFromStatus(gccInfo.status);
+        await toast(client, {
+          message: `📦 GCC Context Loaded\nBranch: ${branch}\nLast: ${lastCommit.substring(0, 40)}...`,
           type: "info",
-          timeout: 10000
+          timeout: 8000,
+        });
+        await log(client, "info", "gcc context loaded", {
+          branch,
+          hasCommit: lastCommit !== "none",
         });
       }
-      
-      // Special reminders for significant actions
-      if (tool === "edit" && input.args?.filePath) {
-        const file = input.args.filePath;
-        // Remind after editing important files
-        if (file.includes("README") || file.includes("config") || file.endsWith(".py") || file.endsWith(".js")) {
-          await client.app.toast({
-            message: `✏️ Modified: ${file.split('/').pop()}\n💡 Consider: opencontext commit "Updated ${file.split('/').pop()}"`,
+
+      if (event.type === "session.compacted") {
+        await log(client, "debug", "event session.compacted");
+        if (!isGCCInitialized(directory)) return;
+        await toast(client, {
+          message: '⚠️ Context compacted.\nConsider: opencontext commit "<summary>"',
+          type: "warning",
+          timeout: 10000,
+        });
+      }
+
+      if (event.type === "message.updated") {
+        if (!isGCCInitialized(directory)) return;
+        messageUpdateCount += 1;
+        const contextPercent = Math.min(100, Math.round((messageUpdateCount / 50) * 100));
+        if (
+          contextPercent >= CONFIG.contextWarningThreshold &&
+          contextPercent % 10 === 0 &&
+          contextPercent !== lastContextWarningPercent
+        ) {
+          lastContextWarningPercent = contextPercent;
+          await log(client, "info", "high context usage", {
+            contextPercent,
+            messageUpdateCount,
+          });
+          await toast(client, {
+            message: `📊 Context usage: ${contextPercent}%\nConsider: opencontext commit "<summary>"`,
             type: "info",
-            timeout: 8000
+            timeout: 8000,
+          });
+        }
+      }
+
+      if (event.type === "session.idle") {
+        await log(client, "debug", "event session.idle", { toolExecutionCount });
+        if (!isGCCInitialized(directory) || toolExecutionCount <= 10) return;
+        await toast(client, {
+          message: `⏸️ Session idle after ${toolExecutionCount} actions.\nConsider: opencontext commit "Session checkpoint"`,
+          type: "info",
+          timeout: 8000,
+        });
+      }
+    },
+
+    "experimental.session.compacting": async (_input, output = {}) => {
+      await log(client, "debug", "hook experimental.session.compacting");
+      if (!isGCCInitialized(directory)) return output;
+
+      const reminder =
+        'OpenContext reminder: context is being compacted. Consider `opencontext commit "<summary>"` to preserve detailed progress.';
+      output.context = Array.isArray(output.context) ? output.context : [];
+      output.context.push(reminder);
+      return output;
+    },
+
+    "experimental.chat.system.transform": async (_input, output = {}) => {
+      if (!isGCCInitialized(directory)) return;
+
+      const gccInfo = await getCachedGCCContext(directory, client);
+      if (!gccInfo) return;
+
+      const branch = parseBranchFromStatus(gccInfo.status);
+      const lastCommit = parseLastCommitFromStatus(gccInfo.status);
+      output.system = Array.isArray(output.system) ? output.system : [];
+      output.system.push(
+        `OpenContext (GCC) Active:
+- Current Branch: ${branch}
+- Last Commit: ${lastCommit}
+- Keep OpenContext updated: commit milestones with opencontext commit.
+- Before retrying an implementation, check previous attempts:
+  opencontext context --search "<feature or failure>"
+  opencontext context --log --lines 80
+- Use opencontext branch/merge/context to track alternatives and outcomes.`
+      );
+      const assertToken = process.env.OPENCONTEXT_ASSERT_TOKEN?.trim();
+      if (assertToken) {
+        output.system.push(
+          `OpenContext verification mode: start your next assistant response with EXACTLY "${assertToken}" then continue normally.`
+        );
+        await log(client, "info", "assert token mode enabled", {
+          assertToken,
+        });
+      }
+      await log(client, "debug", "system prompt augmented", { branch });
+    },
+
+    "tool.execute.after": async (input = {}) => {
+      if (!isGCCInitialized(directory)) return;
+
+      const tool = toToolName(input.tool);
+      const args = input.args ?? {};
+      addRecentTool(tool);
+      toolExecutionCount += 1;
+
+      await log(client, "debug", "hook tool.execute.after", {
+        tool,
+        toolExecutionCount,
+      });
+
+      if (toolExecutionCount % CONFIG.reminderFrequency === 0) {
+        const suggestion = generateCommitSuggestion(tool, args);
+        await toast(client, {
+          message: `🎯 ${toolExecutionCount} actions completed.\nSuggestion:\nopencontext commit "${suggestion}"`,
+          type: "info",
+          timeout: 8000,
+        });
+      }
+
+      if (tool === "edit" && args.filePath) {
+        const file = args.filePath;
+        if (
+          file.includes("README") ||
+          file.includes("config") ||
+          file.endsWith(".py") ||
+          file.endsWith(".js")
+        ) {
+          const filename = file.split("/").pop();
+          await toast(client, {
+            message: `✏️ Modified: ${filename}\nConsider: opencontext commit "Updated ${filename}"`,
+            type: "info",
+            timeout: 7000,
           });
         }
       }
     },
-    
-    /**
-     * Context usage statistics
-     */
-    "message.updated": async (input) => {
-      if (!isGCCInitialized(directory)) return;
-      
-      // Calculate rough context usage (this is approximate)
-      const messageCount = input.messages?.length || 0;
-      const contextPercent = Math.min(100, Math.round((messageCount / 50) * 100));
-      
-      if (contextPercent > CONFIG.contextWarningThreshold && contextPercent % 10 === 0) {
-        await client.app.toast({
-          message: `📊 Context Usage: ${contextPercent}%\nConsider committing to preserve progress.\n\n💡 opencontext commit "<summary>"`,
-          type: "info",
-          timeout: 8000
-        });
-      }
-    },
-    
-    /**
-     * Session idle reminder
-     */
-    "session.idle": async () => {
-      if (!isGCCInitialized(directory)) return;
-      
-      if (toolExecutionCount > 10) {
-        await client.app.toast({
-          message: `⏸️ Session Idle\n${toolExecutionCount} actions this session.\n\n💡 Finalize with:\nopencontext commit "Session checkpoint"`,
-          type: "info",
-          timeout: 10000
-        });
-      }
-    },
-    
-    /**
-     * Log session completion
-     */
-    "session.completed": async () => {
-      if (!isGCCInitialized(directory)) return;
-      
-      if (toolExecutionCount > 5) {
-        await client.app.toast({
-          message: `✅ Session Complete!\n${toolExecutionCount} actions performed.\n\n💡 Don't forget to commit!`,
-          type: "info",
-          timeout: 10000
-        });
-      }
-    }
   };
 };
 

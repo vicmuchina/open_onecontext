@@ -1,7 +1,10 @@
 #!/bin/bash
 #
 # OpenContext One-Command Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash -s -- --local
+#   curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash -s -- --local --project-dir /path/to/project
 #
 
 set -e
@@ -17,6 +20,34 @@ NC='\033[0m' # No Color
 REPO_URL="https://github.com/vicmuchina/open_onecontext"
 INSTALL_DIR="${HOME}/.local/share/opencontext"
 PYTHON_MIN_VERSION="3.9"
+START_DIR="$(pwd)"
+LOCAL_INSTALL=false
+PROJECT_DIR=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --local)
+            LOCAL_INSTALL=true
+            shift
+            ;;
+        --project-dir)
+            if [[ -z "${2:-}" ]]; then
+                echo -e "${RED}❌ --project-dir requires a value${NC}"
+                exit 1
+            fi
+            PROJECT_DIR="$2"
+            shift 2
+            ;;
+        *)
+            echo -e "${RED}❌ Unknown argument: $1${NC}"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "${LOCAL_INSTALL}" == true && -z "${PROJECT_DIR}" ]]; then
+    PROJECT_DIR="${START_DIR}"
+fi
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║     OpenContext Installer - Git Context Controller     ║${NC}"
@@ -108,48 +139,33 @@ cp "${INSTALL_DIR}/opencontext/docs/SKILL.md" \
 
 echo -e "${GREEN}✓ Skill installed${NC}"
 
-# Update OpenCode config file to add OpenContext to plugin array
-OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"
-if [ -f "$OPENCODE_CONFIG" ]; then
+if [[ "${LOCAL_INSTALL}" == true ]]; then
     echo ""
-    echo -e "${YELLOW}📝 Updating OpenCode configuration...${NC}"
-    
-    # Check if OpenContext is already in the plugin array
-    if ! grep -q '"opencontext"' "$OPENCODE_CONFIG" 2>/dev/null; then
-        # Create a backup
-        cp "$OPENCODE_CONFIG" "${OPENCODE_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)"
-        
-        # Add OpenContext to plugin array using Python
-        python3 << EOF
-import json
-import sys
+    echo -e "${YELLOW}📁 Installing project-local OpenCode plugin and skill...${NC}"
 
-try:
-    with open('$OPENCODE_CONFIG', 'r') as f:
-        config = json.load(f)
-    
-    # Add OpenContext to plugin array if not already present
-    if 'plugin' not in config:
-        config['plugin'] = []
-    
-    if 'opencontext' not in config['plugin']:
-        config['plugin'].append('opencontext')
-    
-    with open('$OPENCODE_CONFIG', 'w') as f:
-        json.dump(config, f, indent=2)
-    
-    print("✓ OpenContext added to OpenCode plugin list")
-except Exception as e:
-    print(f"⚠️  Could not update config: {e}", file=sys.stderr)
-    sys.exit(1)
-EOF
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✓ OpenContext added to plugin array${NC}"
-        fi
-    else
-        echo -e "${GREEN}✓ OpenContext already in plugin list${NC}"
+    if [[ ! -d "${PROJECT_DIR}" ]]; then
+        echo -e "${RED}❌ Project directory not found: ${PROJECT_DIR}${NC}"
+        exit 1
     fi
+
+    PROJECT_OPENCODE_DIR="${PROJECT_DIR}/.opencode"
+    mkdir -p "${PROJECT_OPENCODE_DIR}/plugins"
+    mkdir -p "${PROJECT_OPENCODE_DIR}/skills/opencontext"
+
+    cp "${INSTALL_DIR}/opencontext/opencontext/plugin/opencontext-reminder.js" \
+       "${PROJECT_OPENCODE_DIR}/plugins/opencontext-reminder.js"
+    cp "${INSTALL_DIR}/opencontext/docs/SKILL.md" \
+       "${PROJECT_OPENCODE_DIR}/skills/opencontext/SKILL.md"
+
+    echo -e "${GREEN}✓ Project plugin installed: ${PROJECT_OPENCODE_DIR}/plugins/opencontext-reminder.js${NC}"
+    echo -e "${GREEN}✓ Project skill installed: ${PROJECT_OPENCODE_DIR}/skills/opencontext/SKILL.md${NC}"
 fi
+
+echo ""
+echo -e "${BLUE}ℹ️  OpenCode local plugins are auto-loaded from:${NC}"
+echo "   • ~/.config/opencode/plugins/ (global)"
+echo "   • .opencode/plugins/ (project-level)"
+echo "   No opencode.json plugin entry is required for local .js plugin files."
 
 # Create project-level plugin directory structure
 echo ""
@@ -188,6 +204,20 @@ else
     echo -e "${RED}❌ Skill installation failed${NC}"
 fi
 
+if [[ "${LOCAL_INSTALL}" == true ]]; then
+    if [ -f "${PROJECT_DIR}/.opencode/plugins/opencontext-reminder.js" ]; then
+        echo -e "${GREEN}✓ Project-local OpenCode plugin installed${NC}"
+    else
+        echo -e "${RED}❌ Project-local plugin installation failed${NC}"
+    fi
+
+    if [ -f "${PROJECT_DIR}/.opencode/skills/opencontext/SKILL.md" ]; then
+        echo -e "${GREEN}✓ Project-local OpenCode skill installed${NC}"
+    else
+        echo -e "${RED}❌ Project-local skill installation failed${NC}"
+    fi
+fi
+
 # Success message
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
@@ -203,6 +233,12 @@ echo ""
 echo "  2. Start OpenCode (plugin will auto-load):"
 echo "     opencode"
 echo ""
+if [[ "${LOCAL_INSTALL}" == true ]]; then
+echo "  Local project integration installed in:"
+echo "     ${PROJECT_DIR}/.opencode/plugins/"
+echo "     ${PROJECT_DIR}/.opencode/skills/opencontext/"
+echo ""
+fi
 echo "  3. Use GCC commands during development:"
 echo "     opencontext commit \"Implemented feature X\""
 echo "     opencontext branch experiment-optimization"

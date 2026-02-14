@@ -60,6 +60,12 @@ Install everything (CLI, plugin, and skill) with one command:
 curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
 ```
 
+Install global + project-local plugin/skill (run from project root):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash -s -- --local
+```
+
 Or with `wget`:
 
 ```bash
@@ -133,10 +139,28 @@ ls -la .opencode/plugins/opencontext-reminder.js
 
 # Check plugin (global)
 ls -la ~/.config/opencode/plugins/opencontext-reminder.js
-
-# Check config file
-grep -A 5 '"opencontext"' ~/.config/opencode/opencode.json
 ```
+
+### Plugin Development and Debugging
+
+```bash
+# Run plugin integration tests (run-mode)
+./scripts/test-opencode-plugin.sh
+
+# Run serve-mode plugin test (headless API path)
+./scripts/test-opencode-serve-plugin.sh
+
+# Manual debug logs
+opencode --print-logs --log-level DEBUG run "plugin smoke test"
+```
+
+Optional prompt-path assertion mode:
+
+```bash
+OPENCONTEXT_ASSERT_TOKEN=OCX_TEST opencode --print-logs --log-level DEBUG run "reply with ok"
+```
+
+When enabled, the plugin logs `assert token mode enabled` during system prompt transform.
 
 ## Quick Start
 

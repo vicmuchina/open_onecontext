@@ -8,6 +8,18 @@ Install everything (CLI, plugin, skill) with a single command:
 curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
 ```
 
+Install globally + project-local plugin/skill (run from your project root):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash -s -- --local
+```
+
+Install local plugin/skill to an explicit project path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash -s -- --local --project-dir /path/to/project
+```
+
 Or with wget:
 
 ```bash
@@ -22,7 +34,6 @@ The installer will:
 2. ✅ **OpenCode Plugin** - Installed globally in `~/.config/opencode/plugins/`
 3. ✅ **OpenContext Skill** - Installed in `~/.config/opencode/skills/opencontext/`
 4. ✅ **Templates** - Stored in `~/.local/share/opencontext/`
-5. ✅ **Config Update** - Adds OpenContext to plugin list in `~/.config/opencode/opencode.json`
 
 ## Installation Locations
 
@@ -32,27 +43,23 @@ After installation, you'll find:
 ~/.local/share/opencontext/          # Source code and templates
 ~/.config/opencode/plugins/          # OpenCode plugin
 ~/.config/opencode/skills/opencontext/  # OpenContext skill
-~/.config/opencode/opencode.json     # Updated with OpenContext metadata
 ~/.local/bin/opencontext             # CLI executable (if in PATH)
 ```
 
-### Config File Update
+With `--local`, these are also created in your project:
 
-The installer adds OpenContext to the plugin array in your `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "plugin": [
-    "opencode-antigravity-auth@latest",
-    "opencode-skills",
-    "opencode-supermemory@latest",
-    "opencode-pty",
-    "opencontext"
-  ]
-}
+```
+/path/to/project/.opencode/plugins/opencontext-reminder.js
+/path/to/project/.opencode/skills/opencontext/SKILL.md
 ```
 
-This registers OpenContext with OpenCode's plugin system.
+### Plugin Loading Note
+
+Local plugin files are auto-loaded by OpenCode from:
+- `~/.config/opencode/plugins/` (global)
+- `.opencode/plugins/` (project-level)
+
+No `opencode.json` plugin entry is required for local `.js` plugin files.
 
 ## Alternative Installation Methods
 
