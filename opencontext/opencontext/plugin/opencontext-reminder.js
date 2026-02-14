@@ -195,6 +195,12 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         await log(client, "debug", "event session.created");
         if (!isGCCInitialized(directory)) {
           await log(client, "debug", "gcc not initialized", { directory });
+          await toast(client, {
+            message:
+              '📦 OpenContext available but not initialized in this directory.\nRun: opencontext init --project-name "<name>" --goal "<goal>"',
+            type: "info",
+            timeout: 10000,
+          });
           return;
         }
 
@@ -216,7 +222,15 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 
       if (event.type === "session.compacted") {
         await log(client, "debug", "event session.compacted");
-        if (!isGCCInitialized(directory)) return;
+        if (!isGCCInitialized(directory)) {
+          await toast(client, {
+            message:
+              "⚠️ Context compacted.\nInitialize OpenContext first:\nopencontext init --project-name \"<name>\" --goal \"<goal>\"",
+            type: "warning",
+            timeout: 10000,
+          });
+          return;
+        }
         await toast(client, {
           message:
             "⚠️ Context compacted.\nCheckpoint now: opencontext commit \"<summary>\"\nThen recover details with: opencontext context --log --lines 80",
@@ -260,24 +274,38 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 
     "experimental.session.compacting": async (_input, output = {}) => {
       await log(client, "debug", "hook experimental.session.compacting");
-      if (!isGCCInitialized(directory)) return output;
+      const hasGCC = isGCCInitialized(directory);
 
-      const reminder =
-        'OpenContext reminder: context is being compacted. Commit now with `opencontext commit "<summary>"`, then use `opencontext context --log --lines 80` if you need granular prior steps.';
+      const reminder = hasGCC
+        ? 'OpenContext reminder: context is being compacted. Commit now with `opencontext commit "<summary>"`, then use `opencontext context --log --lines 80` if you need granular prior steps.'
+        : 'OpenContext reminder: context is being compacted and GCC is not initialized here. Run `opencontext init --project-name "<name>" --goal "<goal>"` before continuing long tasks.';
       output.context = Array.isArray(output.context) ? output.context : [];
       output.context.push(reminder);
       return output;
     },
 
     "experimental.chat.system.transform": async (_input, output = {}) => {
-      if (!isGCCInitialized(directory)) return;
+      const hasGCC = isGCCInitialized(directory);
+      output.system = Array.isArray(output.system) ? output.system : [];
+      output.system.push(
+        `OpenContext discipline:
+- Keep long-horizon context externalized via OpenContext.
+- If GCC is not initialized in this directory, initialize immediately:
+  opencontext init --project-name "<name>" --goal "<goal>"
+- After significant tool calls (edit/test/research), checkpoint progress.
+- Before retrying failed implementations, retrieve prior attempts from OpenContext.`
+      );
+
+      if (!hasGCC) {
+        await log(client, "debug", "system prompt augmented (no gcc)");
+        return;
+      }
 
       const gccInfo = await getCachedGCCContext(directory, client);
       if (!gccInfo) return;
 
       const branch = parseBranchFromStatus(gccInfo.status);
       const lastCommit = parseLastCommitFromStatus(gccInfo.status);
-      output.system = Array.isArray(output.system) ? output.system : [];
       output.system.push(
         `OpenContext (GCC) Active:
 - Current Branch: ${branch}
@@ -302,7 +330,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
     },
 
     "tool.execute.after": async (input = {}, output = {}) => {
-      if (!isGCCInitialized(directory)) return;
+      const hasGCC = isGCCInitialized(directory);
 
       const tool = toToolName(input.tool);
       const args = input.args ?? {};
@@ -313,18 +341,28 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       await log(client, "debug", "hook tool.execute.after", {
         tool,
         toolExecutionCount,
+        hasGCC,
       });
 
       if (toolExecutionCount % CONFIG.reminderFrequency === 0) {
-        const suggestion = generateCommitSuggestion(tool, args);
-        await toast(client, {
-          message: `🎯 ${toolExecutionCount} actions completed.\nSuggestion:\nopencontext commit "${suggestion}"`,
-          type: "info",
-          timeout: 8000,
-        });
+        if (hasGCC) {
+          const suggestion = generateCommitSuggestion(tool, args);
+          await toast(client, {
+            message: `🎯 ${toolExecutionCount} actions completed.\nSuggestion:\nopencontext commit "${suggestion}"`,
+            type: "info",
+            timeout: 8000,
+          });
+        } else {
+          await toast(client, {
+            message:
+              `🎯 ${toolExecutionCount} actions completed.\nOpenContext is not initialized here.\nRun:\nopencontext init --project-name "<name>" --goal "<goal>"`,
+            type: "info",
+            timeout: 9000,
+          });
+        }
       }
 
-      if (tool === "edit" && args.filePath) {
+      if (hasGCC && tool === "edit" && args.filePath) {
         const file = args.filePath;
         if (
           file.includes("README") ||
@@ -353,11 +391,19 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         if (now - lastResearchReminderTime >= CONFIG.researchReminderCooldownMs) {
           lastResearchReminderTime = now;
           const firstUrl = researchSignal.urls[0] || "";
-          await toast(client, {
-            message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nCapture it now:\nopencontext commit "Research findings on <topic>"\nopencontext context --search "<topic>"`,
-            type: "info",
-            timeout: 10000,
-          });
+          if (hasGCC) {
+            await toast(client, {
+              message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nCapture it now:\nopencontext commit "Research findings on <topic>"\nopencontext context --search "<topic>"`,
+              type: "info",
+              timeout: 10000,
+            });
+          } else {
+            await toast(client, {
+              message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nInitialize OpenContext first:\nopencontext init --project-name "<name>" --goal "<goal>"\nThen commit findings.`,
+              type: "info",
+              timeout: 11000,
+            });
+          }
         }
       }
     },
