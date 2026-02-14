@@ -147,6 +147,9 @@ ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 # Run plugin integration tests (run-mode)
 ./scripts/test-opencode-plugin.sh
 
+# Run deterministic research-reminder unit test
+node ./scripts/test-opencode-plugin-research.mjs
+
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
 

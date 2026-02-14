@@ -10,6 +10,7 @@ import { join } from "path";
 const CONFIG = {
   reminderFrequency: 5,
   contextWarningThreshold: 80,
+  researchReminderCooldownMs: 30000,
   gccDir: ".GCC",
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
@@ -18,6 +19,7 @@ const CONFIG = {
 const recentTools = [];
 let toolExecutionCount = 0;
 let lastContextWarningPercent = 0;
+let lastResearchReminderTime = 0;
 let messageUpdateCount = 0;
 let contextCache = {
   fetchedAt: 0,
@@ -73,6 +75,41 @@ function generateCommitSuggestion(tool, args) {
     return "Analyzed codebase structure";
   }
   return "Checkpoint progress";
+}
+
+function extractUrls(text) {
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s"'`)<>\]]+/g);
+  return matches ? Array.from(new Set(matches)) : [];
+}
+
+function detectResearchSignal(tool, args, toolOutput) {
+  const toolName = String(tool || "").toLowerCase();
+  const isResearchTool =
+    toolName.includes("webfetch") ||
+    toolName.includes("google_search") ||
+    toolName.includes("websearch") ||
+    toolName.includes("search");
+  if (!isResearchTool) return null;
+
+  const argBlob = typeof args === "string" ? args : JSON.stringify(args || {});
+  const outputBlob = typeof toolOutput === "string" ? toolOutput : "";
+  const corpus = `${argBlob}\n${outputBlob}`.toLowerCase();
+
+  const hasGithub = corpus.includes("github.com");
+  const hasDocs =
+    corpus.includes("/docs") ||
+    corpus.includes("docs.") ||
+    corpus.includes("documentation") ||
+    corpus.includes("readme") ||
+    corpus.includes("arxiv.org");
+
+  if (!hasGithub && !hasDocs) return null;
+
+  return {
+    sourceType: hasGithub && hasDocs ? "github+docs" : hasGithub ? "github" : "docs",
+    urls: extractUrls(`${argBlob}\n${outputBlob}`).slice(0, 3),
+  };
 }
 
 async function log(client, level, message, extra = {}) {
@@ -181,7 +218,8 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         await log(client, "debug", "event session.compacted");
         if (!isGCCInitialized(directory)) return;
         await toast(client, {
-          message: '⚠️ Context compacted.\nConsider: opencontext commit "<summary>"',
+          message:
+            "⚠️ Context compacted.\nCheckpoint now: opencontext commit \"<summary>\"\nThen recover details with: opencontext context --log --lines 80",
           type: "warning",
           timeout: 10000,
         });
@@ -225,7 +263,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       if (!isGCCInitialized(directory)) return output;
 
       const reminder =
-        'OpenContext reminder: context is being compacted. Consider `opencontext commit "<summary>"` to preserve detailed progress.';
+        'OpenContext reminder: context is being compacted. Commit now with `opencontext commit "<summary>"`, then use `opencontext context --log --lines 80` if you need granular prior steps.';
       output.context = Array.isArray(output.context) ? output.context : [];
       output.context.push(reminder);
       return output;
@@ -245,6 +283,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 - Current Branch: ${branch}
 - Last Commit: ${lastCommit}
 - Keep OpenContext updated: commit milestones with opencontext commit.
+- After significant tool calls (edit/test/research), checkpoint with opencontext commit.
 - Before retrying an implementation, check previous attempts:
   opencontext context --search "<feature or failure>"
   opencontext context --log --lines 80
@@ -262,11 +301,12 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       await log(client, "debug", "system prompt augmented", { branch });
     },
 
-    "tool.execute.after": async (input = {}) => {
+    "tool.execute.after": async (input = {}, output = {}) => {
       if (!isGCCInitialized(directory)) return;
 
       const tool = toToolName(input.tool);
       const args = input.args ?? {};
+      const toolOutput = output?.output ?? "";
       addRecentTool(tool);
       toolExecutionCount += 1;
 
@@ -297,6 +337,26 @@ export const OpenContextPlugin = async ({ client, directory }) => {
             message: `✏️ Modified: ${filename}\nConsider: opencontext commit "Updated ${filename}"`,
             type: "info",
             timeout: 7000,
+          });
+        }
+      }
+
+      const researchSignal = detectResearchSignal(tool, args, toolOutput);
+      if (researchSignal) {
+        await log(client, "info", "research source detected", {
+          tool,
+          sourceType: researchSignal.sourceType,
+          urls: researchSignal.urls,
+        });
+
+        const now = Date.now();
+        if (now - lastResearchReminderTime >= CONFIG.researchReminderCooldownMs) {
+          lastResearchReminderTime = now;
+          const firstUrl = researchSignal.urls[0] || "";
+          await toast(client, {
+            message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nCapture it now:\nopencontext commit "Research findings on <topic>"\nopencontext context --search "<topic>"`,
+            type: "info",
+            timeout: 10000,
           });
         }
       }
