@@ -352,6 +352,7 @@ opencontext tui [--theme dark|light]
 ### Location
 `.opencode/plugins/opencontext-reminder.js` (project-level)
 `~/.config/opencode/plugins/opencontext-reminder.js` (global)
+`agent.txt` (root fallback install playbook for autonomous/manual setup)
 
 ### Law Policy File
 `.GCC/law-enforcer.json` (primary policy file)
@@ -379,13 +380,27 @@ On assistant completion, the plugin collects:
 - recent tool calls and outputs
 - policy/debt state (checkpoint overdue, failure lookup pending, research capture pending)
 
-That evidence is sent to the configured critic/watchman model, which must return structured JSON:
+That evidence is sent to the configured critic/watchman model through OpenAI-compatible `chat/completions` using `response_format.type=json_schema`.
+Required watchman fields:
 - `violation` (true/false)
 - `rule`
 - `reason`
 - `correction_prompt` (AI-generated correction text)
+- `confidence`
 
-When `violation` is true, the plugin injects `correction_prompt` via `client.session.promptAsync` in the same session, interrupting and redirecting workflow.
+If model output is malformed/non-JSON, enforcement is skipped for that verdict and logged as parse failure.
+When `violation` is true with valid schema output, the plugin injects `correction_prompt` via `client.session.promptAsync` in the same session, interrupting and redirecting workflow.
+
+#### Provider Configuration
+The law policy supports any OpenAI-compatible provider via `.GCC/law-enforcer.json`:
+- `critic.baseUrl`
+- `critic.endpointPath`
+- `critic.authHeader`
+- `critic.apiKeyPrefix`
+- `critic.headers`
+- `critic.request`
+- `critic.model`
+- `critic.apiKeyEnv`
 
 #### Safety Controls
 - global cooldown between injections
@@ -393,6 +408,7 @@ When `violation` is true, the plugin injects `correction_prompt` via `client.ses
 - max consecutive injections per session
 - in-flight protection
 - deterministic fallback when model checks are unavailable
+- planning guard defaults (`gcc.skipCheckpointDuringPlanningAgent`, `watchman.skipDuringPlanningAgent`)
 
 ---
 

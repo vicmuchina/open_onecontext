@@ -358,6 +358,14 @@ def _validate_law_content(law: Dict) -> List[str]:
     if isinstance(critic, dict):
         if "enabled" in critic and not isinstance(critic.get("enabled"), bool):
             errors.append("critic.enabled must be true or false.")
+        if "baseUrl" in critic and not isinstance(critic.get("baseUrl"), str):
+            errors.append("critic.baseUrl must be a string.")
+        if "endpointPath" in critic and not isinstance(critic.get("endpointPath"), str):
+            errors.append("critic.endpointPath must be a string.")
+        if "headers" in critic and not isinstance(critic.get("headers"), dict):
+            errors.append("critic.headers must be an object/mapping.")
+        if "request" in critic and not isinstance(critic.get("request"), dict):
+            errors.append("critic.request must be an object/mapping.")
     else:
         errors.append("critic must be a mapping/object.")
 
@@ -365,6 +373,10 @@ def _validate_law_content(law: Dict) -> List[str]:
     if isinstance(watchman, dict):
         if "enabled" in watchman and not isinstance(watchman.get("enabled"), bool):
             errors.append("watchman.enabled must be true or false.")
+        if "inspectOnIdle" in watchman and not isinstance(watchman.get("inspectOnIdle"), bool):
+            errors.append("watchman.inspectOnIdle must be true or false.")
+        if "skipDuringPlanningAgent" in watchman and not isinstance(watchman.get("skipDuringPlanningAgent"), bool):
+            errors.append("watchman.skipDuringPlanningAgent must be true or false.")
     else:
         errors.append("watchman must be a mapping/object.")
 
@@ -461,19 +473,26 @@ def law_status(law_path_opt: Optional[Path]):
 
     mode = law_data.get("mode", "unknown")
     checkpoint = law_data.get("gcc", {}).get("requireCheckpointEveryTools", "unknown")
+    planning_skip = law_data.get("gcc", {}).get("skipCheckpointDuringPlanningAgent", "unknown")
     critic_enabled = law_data.get("critic", {}).get("enabled", "unknown")
     critic_model = law_data.get("critic", {}).get("model", "unknown")
+    critic_base = law_data.get("critic", {}).get("baseUrl", "unknown")
+    critic_path = law_data.get("critic", {}).get("endpointPath", "unknown")
     watchman_enabled = law_data.get("watchman", {}).get("enabled", "unknown")
     watchman_turns = law_data.get("watchman", {}).get("inspectAssistantTurns", "unknown")
+    watchman_plan_skip = law_data.get("watchman", {}).get("skipDuringPlanningAgent", "unknown")
 
     status_text = (
         f"Path: {law_path}\n"
         f"Mode: {mode}\n"
         f"Checkpoint cadence: {checkpoint}\n"
+        f"Skip checkpoint during planning: {planning_skip}\n"
         f"Critic enabled: {critic_enabled}\n"
         f"Critic model: {critic_model}\n"
+        f"Critic endpoint: {critic_base}{critic_path}\n"
         f"Watchman enabled: {watchman_enabled}\n"
-        f"Watch assistant turns: {watchman_turns}"
+        f"Watch assistant turns: {watchman_turns}\n"
+        f"Skip watchman during planning: {watchman_plan_skip}"
     )
     console.print(Panel(Text(status_text), title="Law Enforcer Status", border_style="blue"))
 

@@ -39,6 +39,8 @@ const DEFAULT_LAW = {
     requireCheckpointEveryTools: 6,
     requireFailedAttemptLookup: true,
     compactionCheckpointRequired: true,
+    skipCheckpointDuringPlanningAgent: true,
+    countReadOnlyToolsForCheckpoint: false,
   },
   mcp: {
     requireAwarenessAtSessionStart: true,
@@ -51,18 +53,27 @@ const DEFAULT_LAW = {
   },
   critic: {
     enabled: true,
-    provider: "chutes",
+    provider: "openai_compatible",
     baseUrl: "https://llm.chutes.ai/v1",
+    endpointPath: "/chat/completions",
+    authHeader: "authorization",
+    apiKeyPrefix: "Bearer",
+    headers: {},
+    request: {},
     model: "openai/gpt-oss-120b-TEE",
     apiKeyEnv: "CHUTES_API_KEY",
     modelEnv: "OPENCONTEXT_LAW_MODEL_ID",
     timeoutMs: 8000,
+    maxTokensCritic: 120,
+    maxTokensWatchman: 320,
   },
   watchman: {
     enabled: true,
     inspectAssistantTurns: true,
     inspectToolCalls: true,
     inspectCompaction: true,
+    inspectOnIdle: true,
+    skipDuringPlanningAgent: true,
     includeRecentMessages: 12,
     includeRecentToolCalls: 12,
   },
@@ -88,6 +99,29 @@ let lawCache = {
 let mcpNamesCache = {
   fetchedAt: 0,
   data: [],
+};
+
+const CRITIC_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["enforce", "reason"],
+  properties: {
+    enforce: { type: "boolean" },
+    reason: { type: "string" },
+  },
+};
+
+const WATCHMAN_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["violation", "rule", "reason", "correction_prompt", "confidence"],
+  properties: {
+    violation: { type: "boolean" },
+    rule: { type: "string" },
+    reason: { type: "string" },
+    correction_prompt: { type: "string" },
+    confidence: { type: "number" },
+  },
 };
 
 function getSessionState(sessionId) {
@@ -322,9 +356,43 @@ function sanitizeLaw(law) {
     1,
     Math.min(20, Number(sanitized.limits.maxConsecutiveInjections || 4))
   );
+  sanitized.gcc.skipCheckpointDuringPlanningAgent =
+    sanitized.gcc.skipCheckpointDuringPlanningAgent !== false;
+  sanitized.gcc.countReadOnlyToolsForCheckpoint =
+    sanitized.gcc.countReadOnlyToolsForCheckpoint === true;
+  if (!sanitized.critic.provider || typeof sanitized.critic.provider !== "string") {
+    sanitized.critic.provider = "openai_compatible";
+  }
+  if (!sanitized.critic.baseUrl || typeof sanitized.critic.baseUrl !== "string") {
+    sanitized.critic.baseUrl = DEFAULT_LAW.critic.baseUrl;
+  }
+  if (!sanitized.critic.endpointPath || typeof sanitized.critic.endpointPath !== "string") {
+    sanitized.critic.endpointPath = DEFAULT_LAW.critic.endpointPath;
+  }
+  sanitized.critic.endpointPath = `/${sanitized.critic.endpointPath.replace(/^\/+/, "")}`;
+  if (!sanitized.critic.authHeader || typeof sanitized.critic.authHeader !== "string") {
+    sanitized.critic.authHeader = DEFAULT_LAW.critic.authHeader;
+  }
+  if (typeof sanitized.critic.apiKeyPrefix !== "string") {
+    sanitized.critic.apiKeyPrefix = DEFAULT_LAW.critic.apiKeyPrefix;
+  }
+  if (!sanitized.critic.headers || typeof sanitized.critic.headers !== "object") {
+    sanitized.critic.headers = {};
+  }
+  if (!sanitized.critic.request || typeof sanitized.critic.request !== "object") {
+    sanitized.critic.request = {};
+  }
   sanitized.critic.timeoutMs = Math.max(
     500,
     Math.min(20000, Number(sanitized.critic.timeoutMs || 8000))
+  );
+  sanitized.critic.maxTokensCritic = Math.max(
+    32,
+    Math.min(2000, Number(sanitized.critic.maxTokensCritic || 120))
+  );
+  sanitized.critic.maxTokensWatchman = Math.max(
+    64,
+    Math.min(4000, Number(sanitized.critic.maxTokensWatchman || 320))
   );
   if (!sanitized.critic.apiKeyEnv || typeof sanitized.critic.apiKeyEnv !== "string") {
     sanitized.critic.apiKeyEnv = "CHUTES_API_KEY";
@@ -336,6 +404,8 @@ function sanitizeLaw(law) {
   sanitized.watchman.inspectAssistantTurns = sanitized.watchman.inspectAssistantTurns !== false;
   sanitized.watchman.inspectToolCalls = sanitized.watchman.inspectToolCalls !== false;
   sanitized.watchman.inspectCompaction = sanitized.watchman.inspectCompaction !== false;
+  sanitized.watchman.inspectOnIdle = sanitized.watchman.inspectOnIdle !== false;
+  sanitized.watchman.skipDuringPlanningAgent = sanitized.watchman.skipDuringPlanningAgent !== false;
   sanitized.watchman.includeRecentMessages = Math.max(
     2,
     Math.min(50, Number(sanitized.watchman.includeRecentMessages || 12))
@@ -543,19 +613,87 @@ function detectFailureSignal(tool, output) {
   );
 }
 
-function shouldIncrementCheckpointDebt(tool, commandText) {
+function isPlanningAgentName(agent) {
+  const text = toLowerSafe(agent);
+  return text.includes("plan");
+}
+
+function isLikelyReadOnlyBashCommand(commandText) {
+  const text = String(commandText || "").trim().toLowerCase();
+  if (!text) return false;
+
+  const mutatingSignals = [
+    "npm install",
+    "pip install",
+    "poetry add",
+    "pnpm add",
+    "yarn add",
+    "git commit",
+    "git push",
+    "git merge",
+    "git rebase",
+    "git cherry-pick",
+    "opencontext commit",
+    "pytest",
+    "npm test",
+    "pnpm test",
+    "yarn test",
+    "cargo test",
+    "go test",
+    "python",
+    "node ",
+    "make",
+    "docker build",
+    "docker run",
+  ];
+  if (mutatingSignals.some((signal) => text.includes(signal))) return false;
+
+  const readonlyPrefixes = [
+    "pwd",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "echo",
+    "printf",
+    "which",
+    "type",
+    "find",
+    "rg",
+    "grep",
+    "sed -n",
+    "git status",
+    "git diff",
+    "git log",
+    "opencontext context",
+    "opencontext status",
+    "opencontext list",
+  ];
+  return readonlyPrefixes.some((prefix) => text.startsWith(prefix));
+}
+
+function shouldIncrementCheckpointDebt({ law, state, tool, commandText }) {
   const t = toLowerSafe(tool);
   if (isOpenContextCommitCommand(commandText) || isOpenContextContextLookup(commandText)) {
     return false;
   }
+  if (
+    law?.gcc?.skipCheckpointDuringPlanningAgent &&
+    isPlanningAgentName(state?.lastAgent)
+  ) {
+    return false;
+  }
+  if (t.includes("bash")) {
+    if (law?.gcc?.countReadOnlyToolsForCheckpoint === true) {
+      return true;
+    }
+    return !isLikelyReadOnlyBashCommand(commandText);
+  }
   return (
     t.includes("edit") ||
     t.includes("write") ||
-    t.includes("multiedit") ||
-    t.includes("bash") ||
-    t.includes("webfetch") ||
-    t.includes("search") ||
-    t.startsWith("mcp__")
+    t.includes("multiedit")
   );
 }
 
@@ -645,6 +783,23 @@ async function collectWatchmanEvidence(client, law, state) {
   };
 }
 
+function buildLawSummaryForInspector(law) {
+  return {
+    mode: law.mode,
+    gcc: law.gcc,
+    mcp: law.mcp,
+    research: law.research,
+    watchman: {
+      enabled: law.watchman.enabled,
+      inspectAssistantTurns: law.watchman.inspectAssistantTurns,
+      inspectToolCalls: law.watchman.inspectToolCalls,
+      inspectCompaction: law.watchman.inspectCompaction,
+      inspectOnIdle: law.watchman.inspectOnIdle,
+      skipDuringPlanningAgent: law.watchman.skipDuringPlanningAgent,
+    },
+  };
+}
+
 function buildViolationPrompt({ rule, detail, commands }) {
   const commandBlock = commands.length > 0
     ? commands.map((cmd) => `- ${cmd}`).join("\n")
@@ -726,8 +881,14 @@ function resolveCriticApiKey(law) {
   const orderedEnvNames = [];
   if (typeof law?.critic?.apiKeyEnv === "string" && law.critic.apiKeyEnv.trim()) {
     orderedEnvNames.push(law.critic.apiKeyEnv.trim());
+  } else if (Array.isArray(law?.critic?.apiKeyEnv)) {
+    for (const name of law.critic.apiKeyEnv) {
+      if (typeof name === "string" && name.trim()) {
+        orderedEnvNames.push(name.trim());
+      }
+    }
   }
-  orderedEnvNames.push("CHUTES_API_KEY", "OPENCONTEXT_LAW_API_KEY");
+  orderedEnvNames.push("CHUTES_API_KEY", "OPENAI_API_KEY", "OPENCONTEXT_LAW_API_KEY");
 
   for (const envName of orderedEnvNames) {
     const value = process.env[envName];
@@ -746,47 +907,60 @@ function resolveCriticModel(law) {
   return law?.critic?.model || DEFAULT_LAW.critic.model;
 }
 
-function parseWatchmanTextFallback(text) {
-  const raw = String(text || "").trim();
-  const lowered = toLowerSafe(raw);
-  if (!raw) return null;
-
-  if (
-    lowered.includes("no violation") ||
-    lowered.includes("compliant") ||
-    lowered.includes("follows the policy")
-  ) {
-    return {
-      violation: false,
-      rule: "",
-      reason: clipText(raw, 400),
-      correctionPrompt: "",
-      source: "watchman_text_fallback",
-    };
-  }
-
-  if (
-    lowered.includes("violation") ||
-    lowered.includes("must") ||
-    lowered.includes("should") ||
-    lowered.includes("required")
-  ) {
-    return {
-      violation: true,
-      rule: "watchman_policy_violation",
-      reason: clipText(raw, 400),
-      correctionPrompt: clipText(
-        `OpenContext Law Enforcer correction:\n${raw}\n\nBefore continuing normal work, satisfy the law requirements, then continue implementation.`,
-        2500
-      ),
-      source: "watchman_text_fallback",
-    };
-  }
-
-  return null;
+function resolveCriticEndpoint(law) {
+  const baseUrl = String(law?.critic?.baseUrl || DEFAULT_LAW.critic.baseUrl).replace(/\/+$/, "");
+  const endpointPath = `/${String(law?.critic?.endpointPath || DEFAULT_LAW.critic.endpointPath).replace(/^\/+/, "")}`;
+  return `${baseUrl}${endpointPath}`;
 }
 
-function extractCompletionMessageContent(message) {
+function buildCriticHeaders(law, apiKey) {
+  const headers = {
+    "content-type": "application/json",
+  };
+  const customHeaders = law?.critic?.headers && typeof law.critic.headers === "object"
+    ? law.critic.headers
+    : {};
+  for (const [key, value] of Object.entries(customHeaders)) {
+    if (typeof key === "string" && key.trim() && value != null) {
+      headers[key] = String(value);
+    }
+  }
+  if (apiKey) {
+    const authHeader = String(law?.critic?.authHeader || DEFAULT_LAW.critic.authHeader).trim();
+    if (authHeader) {
+      const prefix = String(law?.critic?.apiKeyPrefix ?? DEFAULT_LAW.critic.apiKeyPrefix).trim();
+      headers[authHeader] = prefix ? `${prefix} ${apiKey}` : apiKey;
+    }
+  }
+  return headers;
+}
+
+function buildStructuredResponseFormat(schemaName, schema) {
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: schemaName,
+      strict: true,
+      schema,
+    },
+  };
+}
+
+function tryParseJsonObject(value) {
+  if (!value) return null;
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractMessageTextForDebug(message) {
   if (!message || typeof message !== "object") return "";
   const content = message.content;
   if (typeof content === "string") return content;
@@ -795,20 +969,108 @@ function extractCompletionMessageContent(message) {
       .map((part) => {
         if (typeof part === "string") return part;
         if (part && typeof part.text === "string") return part.text;
-        return safeJsonString(part);
+        return "";
       })
+      .filter(Boolean)
       .join("\n");
   }
-  if (content && typeof content === "object") {
-    return safeJsonString(content);
+  if (content && typeof content === "object") return safeJsonString(content);
+  return safeJsonString(message);
+}
+
+function extractStructuredObjectFromCompletion(data) {
+  const message = data?.choices?.[0]?.message || {};
+  const candidates = [];
+
+  if (message.parsed && typeof message.parsed === "object" && !Array.isArray(message.parsed)) {
+    candidates.push(message.parsed);
   }
-  if (typeof message.reasoning_content === "string" && message.reasoning_content) {
-    return message.reasoning_content;
+
+  const content = message.content;
+  if (typeof content === "string") {
+    const parsed = tryParseJsonObject(content);
+    if (parsed) candidates.push(parsed);
+  } else if (Array.isArray(content)) {
+    for (const part of content) {
+      if (typeof part === "string") {
+        const parsed = tryParseJsonObject(part);
+        if (parsed) candidates.push(parsed);
+        continue;
+      }
+      if (!part || typeof part !== "object") continue;
+      const fromPart = tryParseJsonObject(part);
+      if (fromPart) candidates.push(fromPart);
+      const text = typeof part.text === "string" ? part.text : "";
+      const parsedText = tryParseJsonObject(text);
+      if (parsedText) candidates.push(parsedText);
+      if (typeof part.output_text === "string") {
+        const parsedOutputText = tryParseJsonObject(part.output_text);
+        if (parsedOutputText) candidates.push(parsedOutputText);
+      }
+    }
+  } else if (content && typeof content === "object") {
+    candidates.push(content);
   }
-  if (typeof message.reasoning === "string" && message.reasoning) {
-    return message.reasoning;
+
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  for (const call of toolCalls) {
+    const args = call?.function?.arguments;
+    const parsedArgs = tryParseJsonObject(args);
+    if (parsedArgs) candidates.push(parsedArgs);
   }
-  return "";
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function buildLawModelRequest({ law, model, messages, maxTokens, schemaName, schema }) {
+  const requestOverrides = law?.critic?.request && typeof law.critic.request === "object"
+    ? law.critic.request
+    : {};
+  const body = {
+    ...requestOverrides,
+    model,
+    messages,
+    temperature: 0,
+    max_tokens: maxTokens,
+    response_format: buildStructuredResponseFormat(schemaName, schema),
+  };
+  return body;
+}
+
+async function callLawModel({ law, apiKey, model, timeoutMs, body }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const endpoint = resolveCriticEndpoint(law);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: buildCriticHeaders(law, apiKey),
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const raw = await response.text().catch(() => "");
+      return {
+        ok: false,
+        status: response.status,
+        raw: clipText(raw, 500),
+      };
+    }
+    const data = await response.json();
+    return {
+      ok: true,
+      data,
+      parsed: extractStructuredObjectFromCompletion(data),
+      raw: clipText(extractMessageTextForDebug(data?.choices?.[0]?.message || {}), 500),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function runCriticCheck(client, law, payload) {
@@ -817,43 +1079,57 @@ async function runCriticCheck(client, law, payload) {
   if (!apiKey) return { enforce: true, source: "no_api_key" };
   const model = resolveCriticModel(law);
 
-  const timeoutMs = law.critic.timeoutMs || 3500;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${law.critic.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
+    const result = await callLawModel({
+      law,
+      apiKey,
+      model,
+      timeoutMs: law.critic.timeoutMs || 3500,
+      body: buildLawModelRequest({
+        law,
         model,
-        temperature: 0,
-        max_tokens: 120,
         messages: [
           {
             role: "system",
             content:
-              'Return strict JSON only: {"enforce":true|false,"reason":"<short>"}',
+              "You are an OpenContext law gate. Respond in strict JSON schema only.",
           },
           {
             role: "user",
             content: JSON.stringify(payload),
           },
         ],
+        maxTokens: law.critic.maxTokensCritic || 120,
+        schemaName: "opencontext_critic",
+        schema: CRITIC_RESPONSE_SCHEMA,
       }),
     });
-    if (!response.ok) {
-      return { enforce: true, source: "http_error", status: response.status, apiKeyEnv: sourceEnv };
+    if (!result.ok) {
+      return {
+        enforce: true,
+        source: "http_error",
+        status: result.status,
+        raw: result.raw,
+        apiKeyEnv: sourceEnv,
+      };
     }
-    const data = await response.json();
-    const message = data?.choices?.[0]?.message || {};
-    const text = extractCompletionMessageContent(message);
-    const match = String(text).match(/\{[\s\S]*\}/);
-    if (!match) return { enforce: true, source: "parse_missing_json" };
-    const parsed = JSON.parse(match[0]);
+    const parsed = result.parsed;
+    if (!parsed) {
+      return {
+        enforce: true,
+        source: "parse_invalid_json",
+        raw: result.raw,
+        apiKeyEnv: sourceEnv,
+      };
+    }
+    if (typeof parsed.enforce !== "boolean") {
+      return {
+        enforce: true,
+        source: "parse_invalid_shape",
+        raw: clipText(safeJsonString(parsed), 500),
+        apiKeyEnv: sourceEnv,
+      };
+    }
     const enforce = parsed?.enforce !== false;
     return { enforce, source: "critic", reason: parsed?.reason || "" };
   } catch (error) {
@@ -863,8 +1139,6 @@ async function runCriticCheck(client, law, payload) {
       error: error?.message ?? String(error),
       apiKeyEnv: sourceEnv,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -882,79 +1156,63 @@ async function runWatchmanCheck(client, law, payload) {
   }
   const model = resolveCriticModel(law);
 
-  const timeoutMs = law.critic.timeoutMs || 8000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await fetch(`${law.critic.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
+    const result = await callLawModel({
+      law,
+      apiKey,
+      model,
+      timeoutMs: law.critic.timeoutMs || 8000,
+      body: buildLawModelRequest({
+        law,
         model,
-        temperature: 0,
-        max_tokens: 320,
         messages: [
           {
             role: "system",
             content:
-              'You are the OpenContext Law Enforcer Watchman. Evaluate whether the latest assistant behavior violated workflow laws. Return STRICT JSON ONLY: {"violation":true|false,"rule":"<id>","reason":"<short>","correction_prompt":"<required when violation=true>","confidence":0-1}. If no violation, set correction_prompt to "".',
+              "You are the OpenContext Law Enforcer Watchman. Judge only workflow-law compliance and respond in strict JSON schema.",
           },
           {
             role: "user",
             content: JSON.stringify(payload),
           },
         ],
+        maxTokens: law.critic.maxTokensWatchman || 320,
+        schemaName: "opencontext_watchman",
+        schema: WATCHMAN_RESPONSE_SCHEMA,
       }),
     });
-    if (!response.ok) {
-      const raw = await response.text().catch(() => "");
+    if (!result.ok) {
       return {
         available: false,
         violation: false,
         source: "http_error",
-        status: response.status,
-        error: clipText(raw, 500),
+        status: result.status,
+        error: result.raw,
         apiKeyEnv: sourceEnv,
         model,
       };
     }
-
-    const data = await response.json();
-    const message = data?.choices?.[0]?.message || {};
-    const text = extractCompletionMessageContent(message);
-    const match = String(text).match(/\{[\s\S]*\}/);
-    if (!match) {
-      const fallback = parseWatchmanTextFallback(text);
-      if (fallback) {
-        return {
-          available: true,
-          violation: fallback.violation,
-          source: fallback.source,
-          rule: fallback.rule,
-          reason: fallback.reason,
-          correctionPrompt: fallback.correctionPrompt,
-          confidence: 0.4,
-          model,
-          apiKeyEnv: sourceEnv,
-          raw: clipText(text, 500),
-        };
-      }
+    const parsed = result.parsed;
+    if (!parsed) {
       return {
         available: false,
         violation: false,
-        source: "parse_missing_json",
+        source: "parse_invalid_json",
         apiKeyEnv: sourceEnv,
         model,
-        raw: clipText(text || safeJsonString(message), 500),
+        raw: result.raw,
       };
     }
-
-    const parsed = JSON.parse(match[0]);
+    if (typeof parsed.violation !== "boolean") {
+      return {
+        available: false,
+        violation: false,
+        source: "parse_invalid_shape",
+        apiKeyEnv: sourceEnv,
+        model,
+        raw: clipText(safeJsonString(parsed), 500),
+      };
+    }
     const violation = parsed?.violation === true;
     const rule = clipText(parsed?.rule || "watchman_policy_violation", 120);
     const reason = clipText(parsed?.reason || "Policy violation detected by watchman model.", 400);
@@ -980,8 +1238,6 @@ async function runWatchmanCheck(client, law, payload) {
       apiKeyEnv: sourceEnv,
       model,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -1053,7 +1309,7 @@ async function maybeInterrupt(client, directory, law, state, violation) {
   return injected;
 }
 
-function buildViolations({ directory, law, state, tool, commandText, toolOutput, hasGCC }) {
+function buildViolations({ directory, law, state, tool, commandText, toolOutput, hasGCC, planningAgentActive }) {
   const violations = [];
   const checkpointEvery = law.gcc.requireCheckpointEveryTools;
 
@@ -1081,7 +1337,8 @@ function buildViolations({ directory, law, state, tool, commandText, toolOutput,
 
   if (
     state.sinceCommitCount >= checkpointEvery &&
-    isGCCInitialized(directory)
+    isGCCInitialized(directory) &&
+    !(planningAgentActive && law.gcc.skipCheckpointDuringPlanningAgent)
   ) {
     violations.push({
       rule: "checkpoint_overdue",
@@ -1158,6 +1415,7 @@ async function evaluateAndEnforce({
     commandText: commandText || "",
     toolOutput: toolOutput || "",
     hasGCC,
+    planningAgentActive: isPlanningAgentName(state?.lastAgent),
   });
 
   if (violations.length > 0) {
@@ -1176,7 +1434,8 @@ async function evaluateAndEnforce({
     ((trigger === "assistant_turn" && law.watchman.inspectAssistantTurns) ||
       (trigger === "tool_call" && law.watchman.inspectToolCalls) ||
       (trigger === "compaction" && law.watchman.inspectCompaction) ||
-      trigger === "idle");
+      (trigger === "idle" && law.watchman.inspectOnIdle)) &&
+    !(law.watchman.skipDuringPlanningAgent && isPlanningAgentName(state?.lastAgent));
 
   if (!shouldRunWatchman || state.inspectorInFlight) {
     if (!violationDetected) {
@@ -1204,7 +1463,7 @@ async function evaluateAndEnforce({
 
     const watchmanPayload = {
       trigger,
-      law,
+      law: buildLawSummaryForInspector(law),
       latestAssistant,
       recentMessages: evidence.recentMessages,
       recentToolCalls: evidence.recentToolCalls,
@@ -1519,6 +1778,9 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 
       if (!state) return;
       if (!activeSessionId && sessionId) activeSessionId = sessionId;
+      if (typeof input.agent === "string" && input.agent.trim()) {
+        state.lastAgent = input.agent.trim();
+      }
 
       appendRecentTool(state, tool);
       appendRecentToolExecution(state, {
@@ -1539,7 +1801,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         },
       });
       state.toolExecutionCount += 1;
-      if (shouldIncrementCheckpointDebt(tool, commandText)) {
+      if (shouldIncrementCheckpointDebt({ law, state, tool, commandText })) {
         state.sinceCommitCount += 1;
       }
 

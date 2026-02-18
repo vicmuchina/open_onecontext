@@ -1,0 +1,83 @@
+OpenContext + Law Enforcer Auto-Setup (Fallback for agents)
+
+Goal
+- Install OpenContext CLI, OpenCode plugin, skill, and law config even if install.sh fails.
+
+Assumptions
+- Linux/macOS shell
+- opencode already installed
+- python3 + pip available
+
+1) Clone and install CLI
+
+git clone https://github.com/vicmuchina/open_onecontext.git ~/.local/share/opencontext
+cd ~/.local/share/opencontext/opencontext
+pip3 install --user -e .
+
+2) Ensure PATH
+
+export PATH="$HOME/.local/bin:$PATH"
+
+3) Install plugin + skill (global)
+
+mkdir -p ~/.config/opencode/plugins
+mkdir -p ~/.config/opencode/skills/opencontext
+cp ~/.local/share/opencontext/opencontext/opencontext/plugin/opencontext-reminder.js \
+  ~/.config/opencode/plugins/opencontext-reminder.js
+cp ~/.local/share/opencontext/opencontext/docs/SKILL.md \
+  ~/.config/opencode/skills/opencontext/SKILL.md
+
+4) Optional project-local install
+
+cd /path/to/project
+mkdir -p .opencode/plugins
+mkdir -p .opencode/skills/opencontext
+cp ~/.local/share/opencontext/opencontext/opencontext/plugin/opencontext-reminder.js \
+  .opencode/plugins/opencontext-reminder.js
+cp ~/.local/share/opencontext/opencontext/docs/SKILL.md \
+  .opencode/skills/opencontext/SKILL.md
+
+5) Initialize GCC + law policy in project
+
+cd /path/to/project
+opencontext init --project-name "<name>" --goal "<goal>"
+opencontext law init
+opencontext law validate
+
+6) Configure model provider (OpenAI-compatible)
+
+- Edit .GCC/law-enforcer.json -> critic section:
+  - baseUrl: provider base URL (example: https://llm.chutes.ai/v1)
+  - endpointPath: /chat/completions
+  - model: provider model id
+  - apiKeyEnv: env var name holding API key
+  - authHeader/apiKeyPrefix/headers: optional custom auth
+
+- Export API key:
+  export CHUTES_API_KEY="<key>"
+  # or whichever env name matches critic.apiKeyEnv
+
+7) Verify end-to-end
+
+opencontext --version
+opencode --version
+
+# deterministic plugin tests
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-watchman.mjs
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-trace.mjs
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-watchman-malformed.mjs
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-provider-config.mjs
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-planning-guard.mjs
+
+# live server integration test
+CHUTES_API_KEY="<key>" ~/.local/share/opencontext/scripts/test-opencode-watchman-trace-live.sh
+
+8) Runtime logs to inspect
+
+- Plugin logs: run opencode with --print-logs --log-level DEBUG
+- Law enforcer trace file: .GCC/law-enforcer-trace.jsonl
+
+If any test fails
+- Re-copy plugin from source to ~/.config/opencode/plugins/opencontext-reminder.js
+- Re-run opencontext law validate
+- Restart opencode serve / opencode session

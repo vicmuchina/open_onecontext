@@ -26,10 +26,12 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
 6. Inject corrective continuation in the same session via `client.session.promptAsync`
 7. Apply anti-loop controls (cooldowns, same-rule cooldown, max consecutive injections, in-flight guards)
 8. Fall back to deterministic rule checks if watchman model is unavailable
+9. Require structured JSON-schema responses from watchman/critic (OpenAI-compatible `response_format`), with malformed responses ignored (no free-text fallback interruption)
 
 ## Enforcement Contract
 - The watchman can interrupt after an assistant response if policy was violated.
 - Correction prompt text is AI-generated when critic is available.
+- Provider calls are OpenAI-compatible and configurable (base URL, endpoint path, auth header/prefix, custom headers, request overrides).
 - Inspector payload includes:
   - Current law config
   - Latest assistant message text
@@ -37,6 +39,9 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
   - Recent tool calls and outcomes
   - Session debt flags (checkpoint/failure lookup/research capture)
 - Deterministic checks still run for hard requirements (e.g. GCC init, compaction checkpoint).
+- Planning guard defaults avoid false interruptions during planner turns:
+  - `gcc.skipCheckpointDuringPlanningAgent=true`
+  - `watchman.skipDuringPlanningAgent=true`
 
 ## Law File
 Primary file:
@@ -56,6 +61,7 @@ CLI support:
 Default:
 - Provider style: OpenAI-compatible
 - Endpoint: `https://llm.chutes.ai/v1`
+- Path: `/chat/completions`
 - Model: `openai/gpt-oss-120b-TEE`
 - API key env (default): `CHUTES_API_KEY` (fallback: `OPENCONTEXT_LAW_API_KEY`)
 - Optional model override env: `OPENCONTEXT_LAW_MODEL_ID`
@@ -63,6 +69,7 @@ Default:
 Behavior:
 - If available: watchman evaluates every assistant turn and returns structured violation JSON plus corrective prompt.
 - If unavailable: deterministic rules continue enforcement.
+- If response is malformed/non-JSON: logged as parse error and ignored for interruption.
 
 ## Installation Contract
 One-command install still installs:
@@ -73,6 +80,7 @@ One-command install still installs:
 Also:
 - Installs policy template files
 - Initializes `.GCC/law-enforcer.json` for local project installs when `.GCC` exists
+- Ships `agent.txt` fallback setup flow for autonomous/manual installation when installer automation fails
 
 ## Test Contract
 Must pass:
@@ -81,6 +89,9 @@ Must pass:
 - deterministic interruption test
 - new assistant-turn watchman interruption test
 - new watchman trace logging test (request/response + tool evidence)
+- malformed watchman output guard test (no injection on invalid output)
+- provider-agnostic config test (custom endpoint/header + schema request)
+- planning guard test (no checkpoint interruption for planner agent)
 
 ## Non-Goals (Current)
 - Hard stop/block on session completion

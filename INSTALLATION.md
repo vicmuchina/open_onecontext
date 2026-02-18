@@ -26,6 +26,12 @@ Or with wget:
 wget -qO- https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
 ```
 
+If installer automation fails, use the agent fallback playbook:
+
+```bash
+cat agent.txt
+```
+
 ## What Gets Installed
 
 The installer will:
@@ -132,15 +138,25 @@ export CHUTES_API_KEY="<your_api_key>"
 export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
 ```
 
-You can also edit `.GCC/law-enforcer.json` and change:
+You can also edit `.GCC/law-enforcer.json` for any OpenAI-compatible provider:
 
 ```json
 {
   "critic": {
-    "model": "<any_chutes_model_id>"
+    "provider": "openai_compatible",
+    "baseUrl": "https://<provider-base>/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "model": "<provider_model_id>",
+    "apiKeyEnv": "CHUTES_API_KEY"
   }
 }
 ```
+
+The plugin sends `response_format.type=json_schema` and only enforces model output when structured JSON is valid.
 
 Watchman trace logs are written to:
 
@@ -221,6 +237,9 @@ opencontext status
 
 # 5. Launch dashboard
 opencontext tui
+
+# 6. Inspect enforcement evidence while debugging
+tail -n 50 .GCC/law-enforcer-trace.jsonl
 ```
 
 ## Uninstall

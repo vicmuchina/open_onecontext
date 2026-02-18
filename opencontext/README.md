@@ -26,6 +26,8 @@ OpenContext elevates LLM agent context from passive token streams to a navigable
 - Continuous Law Enforcer checks (GCC/MCP/research)
 - Per-assistant-turn watchman inspection using session transcript + tool traces
 - In-session interruption prompts on workflow violations (AI-generated correction prompt)
+- Strict JSON-schema watchman/critic parsing (no free-text fallback interruption)
+- OpenAI-compatible provider configuration (Chutes or any compatible endpoint)
 - Context compaction checkpoint enforcement
 - Session handoff support
 
@@ -79,6 +81,7 @@ This will:
 - ✅ Install the OpenCode plugin (global)
 - ✅ Install the OpenContext skill
 - ✅ Set up all necessary directories
+- ✅ Provide fallback bootstrap instructions in repo `agent.txt`
 
 ### Via pip
 
@@ -164,6 +167,15 @@ node ./scripts/test-opencode-plugin-watchman.mjs
 # Run watchman trace logging test (request/response + tool evidence)
 node ./scripts/test-opencode-plugin-trace.mjs
 
+# Run malformed provider-output guard test (must NOT inject prompt)
+node ./scripts/test-opencode-plugin-watchman-malformed.mjs
+
+# Run provider-agnostic OpenAI-compatible config test
+node ./scripts/test-opencode-plugin-provider-config.mjs
+
+# Run planning guard test (prevents checkpoint interruption during plan agent)
+node ./scripts/test-opencode-plugin-planning-guard.mjs
+
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
 
@@ -215,23 +227,37 @@ opencontext law validate
 opencontext law status
 ```
 
-Set watchman API key (for critic/watchman model calls):
+Configure critic/watchman provider (OpenAI-compatible):
 
 ```bash
-export CHUTES_API_KEY="<your_chutes_api_key>"
-# Optional: override watchman model without editing law file
+export CHUTES_API_KEY="<your_api_key>"
+# Optional model override without editing law file
 export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
 ```
 
-You can also change the model directly in `.GCC/law-enforcer.json`:
+Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but you can switch to any OpenAI-compatible provider:
 
 ```json
 {
   "critic": {
-    "model": "openai/gpt-oss-120b-TEE"
+    "provider": "openai_compatible",
+    "baseUrl": "https://<provider-base>/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "model": "<provider_model_id>",
+    "apiKeyEnv": "CHUTES_API_KEY",
+    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID"
   }
 }
 ```
+
+Notes:
+- `apiKeyEnv` is the env var name used at runtime.
+- If your provider does not use `Authorization: Bearer`, change `authHeader` and `apiKeyPrefix`.
+- The plugin always sends `response_format: { type: "json_schema", ... }` and only accepts valid structured JSON responses for enforcement.
 
 Watchman request/response traces are persisted to:
 
@@ -239,85 +265,61 @@ Watchman request/response traces are persisted to:
 .GCC/law-enforcer-trace.jsonl
 ```
 
-### 3. Daily Workflow
+### 3. Day-to-Day Workflow with OpenCode
+
+1) Start a project once:
 
 ```bash
 opencontext init --project-name "MyApp" --goal "Build a web scraper"
+opencontext law init
+opencontext law validate
 ```
 
-Creates `.GCC/` directory with:
-- `main.md` - Project roadmap
-- `branches/main/` - Main branch with commit.md, log.md, metadata.yaml
-
-### 2. Work with Agent
-
-The OpenCode plugin will:
-- ✅ Auto-load context on session start
-- ⚖️ Enforce checkpointing after significant tool activity
-- ⚠️ Enforce post-compaction checkpoint + recovery
-- 🔎 Enforce research-source capture into GCC
-- 🧰 Remind/enforce MCP usage when relevant
-- 📊 Show context usage statistics
-
-### 3. Commit Progress
+2) Start OpenCode normally (interactive) or via server mode:
 
 ```bash
-# After implementing a feature
-opencontext commit "Implemented basic scraping logic"
+opencode
+# or
+opencode serve --hostname 127.0.0.1 --port 4096 --print-logs --log-level DEBUG
 ```
 
-This:
-- Updates commit.md with 3-block format
-- Appends execution traces to log.md
-- Updates metadata.yaml
-- Creates git commit: `[GCC] Implemented basic scraping logic`
+3) Work as usual. The plugin continuously enforces:
+- checkpoint discipline
+- failure lookup before retries
+- research capture after docs/GitHub findings
+- MCP awareness and usage nudges
+- session compaction recovery
 
-### 4. Explore Alternatives
+4) When the Law Enforcer interrupts, satisfy required actions and continue:
 
 ```bash
-# Try different approach
-opencontext branch experiment-async-scraper
-
-# Work on alternative...
-# Decide to abandon
-opencontext commit "Abandoned async approach" \
-  --approach "Async Scraper" \
-  --status abandoned \
-  --reason "Complexity outweighs benefits"
-
-# Switch back and merge learnings
-opencontext switch main
-opencontext merge experiment-async-scraper
+opencontext context --log --lines 80
+opencontext commit "Checkpoint after <work>"
 ```
 
-### 5. View Dashboard
+5) Inspect runtime evidence while debugging:
 
 ```bash
-opencontext tui
+# OpenCode/plugin logs
+opencode --print-logs --log-level DEBUG run "plugin smoke test"
+
+# Law Enforcer trace evidence
+tail -n 50 .GCC/law-enforcer-trace.jsonl
 ```
 
-Launch interactive dashboard to:
-- Browse branches and commits
-- View evolution history
-- Search context
-- See performance metrics
+6) Plan-agent guard behavior:
+- By default, planning phases are not interrupted for checkpoint debt.
+- This is controlled by:
+  - `gcc.skipCheckpointDuringPlanningAgent`
+  - `watchman.skipDuringPlanningAgent`
 
-### 6. Verify Installation
-
-Test that everything is working:
+7) Verify install quickly:
 
 ```bash
-# Check CLI is installed
 opencontext --version
-
-# Check GCC status
+opencode --version
 opencontext status
-
-# View context
 opencontext context
-
-# Check git integration (if in a git repo)
-git log --oneline | grep "\[GCC\]"
 ```
 
 ## Commands
@@ -601,6 +603,12 @@ The OpenCode plugin hooks into OpenCode's event system:
    - Shows summary notification
    - Reminds to commit if actions were performed
 
+### Watchman Response Contract
+- Provider API: OpenAI-compatible `POST /chat/completions`
+- Request includes `response_format.type = json_schema`
+- Required output fields: `violation`, `rule`, `reason`, `correction_prompt`, `confidence`
+- Malformed/free-text responses are logged as parse errors and are never used for interruption prompts
+
 ## Evolution Tracking
 
 Track your agent's learning journey:
@@ -668,6 +676,39 @@ metadata:
   track_performance: true
 ```
 
+### Law Enforcer Policy (Primary)
+`.GCC/law-enforcer.json`:
+
+```json
+{
+  "gcc": {
+    "requireCheckpointEveryTools": 6,
+    "skipCheckpointDuringPlanningAgent": true,
+    "countReadOnlyToolsForCheckpoint": false
+  },
+  "critic": {
+    "provider": "openai_compatible",
+    "baseUrl": "https://llm.chutes.ai/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "model": "openai/gpt-oss-120b-TEE",
+    "apiKeyEnv": "CHUTES_API_KEY",
+    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID"
+  },
+  "watchman": {
+    "enabled": true,
+    "inspectAssistantTurns": true,
+    "inspectToolCalls": true,
+    "inspectCompaction": true,
+    "inspectOnIdle": true,
+    "skipDuringPlanningAgent": true
+  }
+}
+```
+
 ## Examples
 
 ### Session Handoff Example
@@ -733,6 +774,44 @@ opencontext merge experiment-caching
    ```bash
    opencode --print-logs
    ```
+
+### Malformed Law Enforcer Output
+
+**Problem:** Interruption prompt text looks truncated or malformed.
+
+**Checks:**
+1. Validate law config:
+   ```bash
+   opencontext law validate
+   ```
+2. Check trace rows:
+   ```bash
+   tail -n 50 .GCC/law-enforcer-trace.jsonl
+   ```
+3. Confirm provider returns valid JSON-schema output for watchman fields:
+   - `violation`
+   - `rule`
+   - `reason`
+   - `correction_prompt`
+   - `confidence`
+
+Malformed/non-JSON provider output is ignored by design and logged as parse failure.
+
+### Planning Interrupted Too Aggressively
+
+**Problem:** Plan-agent runs are interrupted by checkpoint debt.
+
+**Fix:** Ensure these policy flags are enabled in `.GCC/law-enforcer.json`:
+```json
+{
+  "gcc": {
+    "skipCheckpointDuringPlanningAgent": true
+  },
+  "watchman": {
+    "skipDuringPlanningAgent": true
+  }
+}
+```
 
 ### Command Not Found
 
