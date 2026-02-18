@@ -11,34 +11,53 @@ const pluginFile = join(rootDir, "opencontext", "opencontext", "plugin", "openco
 const tempDir = mkdtempSync(join(tmpdir(), "ocx-plugin-law-"));
 mkdirSync(join(tempDir, ".GCC"), { recursive: true });
 writeFileSync(
-  join(tempDir, ".GCC", "law-enforcer.yaml"),
-  `version: 1
-mode: interrupt_continue
-cooldowns:
-  interruptionSeconds: 5
-  sameRuleSeconds: 20
-limits:
-  maxConsecutiveInjections: 3
-gcc:
-  requireInit: true
-  requireCheckpointEveryTools: 2
-  requireFailedAttemptLookup: true
-  compactionCheckpointRequired: true
-mcp:
-  requireAwarenessAtSessionStart: false
-  requireUseWhenRelevant: false
-  usageReminderEveryTools: 4
-research:
-  requireCaptureOnDocsOrGithub: true
-  docsKeywords: [docs, readme, documentation, arxiv.org]
-critic:
-  enabled: false
-  provider: openai_compatible
-  baseUrl: https://llm.chutes.ai/v1
-  model: openai/gpt-oss-120b-TEE
-  apiKeyEnv: OPENCONTEXT_LAW_API_KEY
-  timeoutMs: 3500
-`,
+  join(tempDir, ".GCC", "law-enforcer.json"),
+  JSON.stringify({
+    version: 1,
+    mode: "interrupt_continue",
+    cooldowns: {
+      interruptionSeconds: 5,
+      sameRuleSeconds: 20,
+    },
+    limits: {
+      maxConsecutiveInjections: 3,
+    },
+    gcc: {
+      requireInit: true,
+      requireCheckpointEveryTools: 2,
+      requireFailedAttemptLookup: true,
+      compactionCheckpointRequired: true,
+    },
+    mcp: {
+      requireAwarenessAtSessionStart: false,
+      requireUseWhenRelevant: false,
+      usageReminderEveryTools: 4,
+    },
+    research: {
+      requireCaptureOnDocsOrGithub: true,
+      docsKeywords: ["docs", "readme", "documentation", "arxiv.org"],
+    },
+    critic: {
+      enabled: false,
+      provider: "chutes",
+      baseUrl: "https://llm.chutes.ai/v1",
+      model: "openai/gpt-oss-120b-TEE",
+      apiKeyEnv: "CHUTES_API_KEY",
+      timeoutMs: 3500,
+    },
+    watchman: {
+      enabled: true,
+      inspectAssistantTurns: true,
+      inspectToolCalls: true,
+      inspectCompaction: true,
+      includeRecentMessages: 8,
+      includeRecentToolCalls: 8,
+    },
+    observability: {
+      traceEnabled: true,
+      traceFile: "law-enforcer-trace.jsonl",
+    },
+  }),
   "utf-8"
 );
 

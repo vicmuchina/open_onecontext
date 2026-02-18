@@ -32,3 +32,6 @@ watchman:
   inspectCompaction: true
   includeRecentMessages: 12
   includeRecentToolCalls: 12
+observability:
+  traceEnabled: true
+  traceFile: law-enforcer-trace.jsonl

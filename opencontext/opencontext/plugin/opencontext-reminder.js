@@ -5,7 +5,7 @@
  * advisory reminders to continuous, interrupt-and-continue enforcement.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { appendFileSync, existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -13,7 +13,9 @@ const CONFIG = {
   contextWarningThreshold: 80,
   researchReminderCooldownMs: 30000,
   gccDir: ".GCC",
-  lawFileName: "law-enforcer.yaml",
+  lawFileNameJson: "law-enforcer.json",
+  lawFileNameYaml: "law-enforcer.yaml",
+  traceFileName: "law-enforcer-trace.jsonl",
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
   lawCacheMs: 5000,
@@ -63,6 +65,10 @@ const DEFAULT_LAW = {
     inspectCompaction: true,
     includeRecentMessages: 12,
     includeRecentToolCalls: 12,
+  },
+  observability: {
+    traceEnabled: true,
+    traceFile: "law-enforcer-trace.jsonl",
   },
 };
 
@@ -338,18 +344,32 @@ function sanitizeLaw(law) {
     2,
     Math.min(50, Number(sanitized.watchman.includeRecentToolCalls || 12))
   );
+  sanitized.observability = sanitized.observability && typeof sanitized.observability === "object"
+    ? sanitized.observability
+    : {};
+  sanitized.observability.traceEnabled = sanitized.observability.traceEnabled !== false;
+  if (
+    !sanitized.observability.traceFile ||
+    typeof sanitized.observability.traceFile !== "string"
+  ) {
+    sanitized.observability.traceFile = CONFIG.traceFileName;
+  }
   if (!Array.isArray(sanitized.research.docsKeywords)) {
     sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
   }
   return sanitized;
 }
 
-function getLawPath(directory) {
-  return join(directory, CONFIG.gccDir, CONFIG.lawFileName);
+function getLawPaths(directory) {
+  return [
+    join(directory, CONFIG.gccDir, CONFIG.lawFileNameJson),
+    join(directory, CONFIG.gccDir, CONFIG.lawFileNameYaml),
+  ];
 }
 
 async function loadLaw(client, directory) {
-  const lawPath = getLawPath(directory);
+  const lawPaths = getLawPaths(directory);
+  const lawPath = lawPaths.find((path) => existsSync(path)) || lawPaths[0];
   if (
     lawCache.data &&
     lawCache.path === lawPath &&
@@ -362,8 +382,12 @@ async function loadLaw(client, directory) {
   if (existsSync(lawPath)) {
     try {
       const raw = readFileSync(lawPath, "utf-8");
-      parsed = parseYamlLike(raw);
-      await log(client, "debug", "law.loaded", { lawPath });
+      if (lawPath.endsWith(".json")) {
+        parsed = JSON.parse(raw);
+      } else {
+        parsed = parseYamlLike(raw);
+      }
+      await log(client, "debug", "law.loaded", { lawPath, format: lawPath.endsWith(".json") ? "json" : "yaml" });
     } catch (error) {
       await log(client, "warn", "law.load_failed", {
         lawPath,
@@ -380,6 +404,24 @@ async function loadLaw(client, directory) {
     data: law,
   };
   return law;
+}
+
+async function appendLawTrace(client, directory, law, record) {
+  if (!law?.observability?.traceEnabled) return;
+  const fileName = law?.observability?.traceFile || CONFIG.traceFileName;
+  const tracePath = join(directory, CONFIG.gccDir, fileName);
+  const payload = {
+    at: new Date().toISOString(),
+    ...record,
+  };
+  try {
+    appendFileSync(tracePath, `${JSON.stringify(payload)}\n`, "utf-8");
+  } catch (error) {
+    await log(client, "debug", "law.trace_write_failed", {
+      tracePath,
+      error: error?.message ?? String(error),
+    });
+  }
 }
 
 async function log(client, level, message, extra = {}) {
@@ -883,7 +925,8 @@ async function runWatchmanCheck(client, law, payload) {
     }
 
     const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content || "";
+    const message = data?.choices?.[0]?.message || {};
+    const text = extractCompletionMessageContent(message);
     const match = String(text).match(/\{[\s\S]*\}/);
     if (!match) {
       const fallback = parseWatchmanTextFallback(text);
@@ -970,6 +1013,16 @@ async function maybeInterrupt(client, directory, law, state, violation) {
   if (!enforce) return false;
 
   const prompt = violation.promptText || buildViolationPrompt(violation);
+  await appendLawTrace(client, directory, law, {
+    type: "law.interrupt.request",
+    sessionId: state.sessionId,
+    violation: {
+      rule: violation.rule,
+      detail: violation.detail,
+      source: violation.source || "deterministic",
+    },
+    prompt: clipText(prompt, 4000),
+  });
   const injected = await injectContinuation(client, directory, state, prompt);
   if (injected) {
     state.lastInjectionAt = now;
@@ -981,6 +1034,15 @@ async function maybeInterrupt(client, directory, law, state, violation) {
       rule: violation.rule,
       detail: violation.detail,
       source: violation.source || "deterministic",
+    });
+    await appendLawTrace(client, directory, law, {
+      type: "law.interrupt.injected",
+      sessionId: state.sessionId,
+      violation: {
+        rule: violation.rule,
+        detail: violation.detail,
+        source: violation.source || "deterministic",
+      },
     });
   }
   await toast(client, {
@@ -1140,13 +1202,33 @@ async function evaluateAndEnforce({
       return false;
     }
 
-    const verdict = await runWatchmanCheck(client, law, {
+    const watchmanPayload = {
       trigger,
       law,
       latestAssistant,
       recentMessages: evidence.recentMessages,
       recentToolCalls: evidence.recentToolCalls,
       debts: evidence.debts,
+    };
+    await appendLawTrace(client, directory, law, {
+      type: "watchman.request",
+      sessionId: state.sessionId,
+      trigger,
+      model: resolveCriticModel(law),
+      evidence: {
+        latestAssistant,
+        recentMessages: evidence.recentMessages,
+        recentToolCalls: evidence.recentToolCalls,
+        debts: evidence.debts,
+      },
+    });
+
+    const verdict = await runWatchmanCheck(client, law, watchmanPayload);
+    await appendLawTrace(client, directory, law, {
+      type: "watchman.response",
+      sessionId: state.sessionId,
+      trigger,
+      verdict,
     });
 
     await log(client, "info", "law.watchman.verdict", {
@@ -1445,6 +1527,16 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         commandText: clipText(commandText),
         args: clipText(safeJsonString(args)),
         output: clipText(safeJsonString(toolOutput)),
+      });
+      await appendLawTrace(client, directory, law, {
+        type: "tool.execute.after",
+        sessionId: state.sessionId,
+        tool: {
+          name: tool,
+          commandText: clipText(commandText),
+          args: clipText(safeJsonString(args)),
+          output: clipText(safeJsonString(toolOutput)),
+        },
       });
       state.toolExecutionCount += 1;
       if (shouldIncrementCheckpointDebt(tool, commandText)) {

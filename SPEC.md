@@ -353,6 +353,13 @@ opencontext tui [--theme dark|light]
 `.opencode/plugins/opencontext-reminder.js` (project-level)
 `~/.config/opencode/plugins/opencontext-reminder.js` (global)
 
+### Law Policy File
+`.GCC/law-enforcer.json` (primary policy file)
+- JSON format mirrors normal config style used by OpenCode config files.
+
+### Watchman Trace File
+`.GCC/law-enforcer-trace.jsonl` (JSONL trace of watchman requests/responses and tool evidence)
+
 ### Active Law Enforcer Runtime
 
 The plugin is a continuous watchman. It inspects the active session and can interrupt the worker model if workflow laws are violated.

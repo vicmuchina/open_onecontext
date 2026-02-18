@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -8,10 +8,11 @@ const __dirname = dirname(__filename);
 const rootDir = join(__dirname, "..");
 const pluginFile = join(rootDir, "opencontext", "opencontext", "plugin", "opencontext-reminder.js");
 
-const tempDir = mkdtempSync(join(tmpdir(), "ocx-plugin-watchman-"));
-mkdirSync(join(tempDir, ".GCC"), { recursive: true });
+const tempDir = mkdtempSync(join(tmpdir(), "ocx-plugin-trace-"));
+const gccDir = join(tempDir, ".GCC");
+mkdirSync(gccDir, { recursive: true });
 writeFileSync(
-  join(tempDir, ".GCC", "law-enforcer.json"),
+  join(gccDir, "law-enforcer.json"),
   JSON.stringify({
     version: 1,
     mode: "interrupt_continue",
@@ -43,12 +44,12 @@ writeFileSync(
       baseUrl: "https://llm.chutes.ai/v1",
       model: "openai/gpt-oss-120b-TEE",
       apiKeyEnv: "CHUTES_API_KEY",
-      timeoutMs: 4000,
+      timeoutMs: 3000,
     },
     watchman: {
       enabled: true,
       inspectAssistantTurns: true,
-      inspectToolCalls: false,
+      inspectToolCalls: true,
       inspectCompaction: false,
       includeRecentMessages: 8,
       includeRecentToolCalls: 8,
@@ -61,13 +62,9 @@ writeFileSync(
   "utf-8"
 );
 
-const logEntries = [];
-const prompts = [];
 const client = {
   app: {
-    log: async ({ body }) => {
-      logEntries.push(body);
-    },
+    log: async () => {},
   },
   tui: {
     showToast: async () => {},
@@ -78,15 +75,15 @@ const client = {
         {
           info: {
             id: "msg-user-1",
-            sessionID: "sess-watchman-1",
+            sessionID: "sess-trace-1",
             role: "user",
           },
-          parts: [{ type: "text", text: "test opencontext" }],
+          parts: [{ type: "text", text: "Run tests then continue" }],
         },
         {
           info: {
             id: "msg-assistant-1",
-            sessionID: "sess-watchman-1",
+            sessionID: "sess-trace-1",
             role: "assistant",
             finish: "stop",
             agent: "build",
@@ -96,13 +93,11 @@ const client = {
               completed: new Date().toISOString(),
             },
           },
-          parts: [{ type: "text", text: "I am continuing work without checking OpenContext." }],
+          parts: [{ type: "text", text: "I ran tools and completed." }],
         },
       ],
     }),
-    promptAsync: async (payload) => {
-      prompts.push(payload);
-    },
+    promptAsync: async () => {},
   },
 };
 
@@ -116,14 +111,13 @@ global.fetch = async () => ({
     choices: [
       {
         message: {
-          content: JSON.stringify({
-            violation: true,
-            rule: "gcc_checkpoint_required",
-            reason: "Assistant ignored OpenContext workflow discipline.",
-            correction_prompt:
-              "OpenContext Law Enforcer interruption from watchman model: run `opencontext context --log --lines 80`, then `opencontext commit \"Checkpoint after watchman review\"`, then continue the task.",
-            confidence: 0.93,
-          }),
+          content: {
+            violation: false,
+            rule: "",
+            reason: "No violation detected.",
+            correction_prompt: "",
+            confidence: 0.92,
+          },
         },
       },
     ],
@@ -139,10 +133,32 @@ try {
     event: {
       type: "session.created",
       properties: {
-        info: { id: "sess-watchman-1" },
+        info: { id: "sess-trace-1" },
       },
     },
   });
+
+  await hooks["tool.execute.after"](
+    {
+      tool: "bash",
+      args: { cmd: "npm test" },
+      sessionID: "sess-trace-1",
+    },
+    {
+      output: "all tests passed",
+    }
+  );
+
+  await hooks["tool.execute.after"](
+    {
+      tool: "edit",
+      args: { filePath: "src/index.ts" },
+      sessionID: "sess-trace-1",
+    },
+    {
+      output: "edited file",
+    }
+  );
 
   await hooks.event({
     event: {
@@ -150,7 +166,7 @@ try {
       properties: {
         info: {
           id: "msg-assistant-1",
-          sessionID: "sess-watchman-1",
+          sessionID: "sess-trace-1",
           role: "assistant",
           finish: "stop",
           agent: "build",
@@ -164,31 +180,41 @@ try {
     },
   });
 
-  const watchmanVerdictLog = logEntries.some((entry) => entry?.message === "law.watchman.verdict");
-  const interruptionLog = logEntries.some((entry) => entry?.message === "law.interrupt.injected");
-  const promptInjected = prompts.length > 0;
-  const promptContainsWatchmanText =
-    promptInjected &&
-    String(prompts[0]?.body?.parts?.[0]?.text || "").includes("watchman model");
+  const tracePath = join(gccDir, "law-enforcer-trace.jsonl");
+  const lines = readFileSync(tracePath, "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 
-  if (!watchmanVerdictLog) {
-    console.error("FAIL  watchman verdict log was not emitted");
+  const hasToolTrace = lines.some(
+    (entry) => entry.type === "tool.execute.after" && entry.tool?.name === "bash"
+  );
+  const requestTrace = lines.find((entry) => entry.type === "watchman.request");
+  const responseTrace = lines.find((entry) => entry.type === "watchman.response");
+  const requestHasToolEvidence =
+    requestTrace &&
+    Array.isArray(requestTrace.evidence?.recentToolCalls) &&
+    requestTrace.evidence.recentToolCalls.length > 0;
+
+  if (!hasToolTrace) {
+    console.error("FAIL  tool trace entry missing");
     process.exit(1);
   }
-  if (!interruptionLog) {
-    console.error("FAIL  watchman interruption log was not emitted");
+  if (!requestTrace) {
+    console.error("FAIL  watchman request trace missing");
     process.exit(1);
   }
-  if (!promptInjected) {
-    console.error("FAIL  watchman interruption prompt was not injected");
+  if (!responseTrace) {
+    console.error("FAIL  watchman response trace missing");
     process.exit(1);
   }
-  if (!promptContainsWatchmanText) {
-    console.error("FAIL  injected prompt did not contain watchman-generated text");
+  if (!requestHasToolEvidence) {
+    console.error("FAIL  watchman request trace missing recent tool evidence");
     process.exit(1);
   }
 
-  console.log("PASS  watchman assistant-turn interruption path");
+  console.log("PASS  watchman trace file captures request/response + tool evidence");
 } finally {
   global.fetch = oldFetch;
   if (oldApiKey == null) delete process.env.CHUTES_API_KEY;

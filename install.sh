@@ -162,12 +162,12 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
 
     PROJECT_GCC_DIR="${PROJECT_DIR}/.GCC"
     if [[ -d "${PROJECT_GCC_DIR}" ]]; then
-        if [[ ! -f "${PROJECT_GCC_DIR}/law-enforcer.yaml" ]]; then
-            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.yaml" \
-               "${PROJECT_GCC_DIR}/law-enforcer.yaml"
-            echo -e "${GREEN}✓ Law file initialized: ${PROJECT_GCC_DIR}/law-enforcer.yaml${NC}"
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-enforcer.json" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.json" \
+               "${PROJECT_GCC_DIR}/law-enforcer.json"
+            echo -e "${GREEN}✓ Law file initialized: ${PROJECT_GCC_DIR}/law-enforcer.json${NC}"
         else
-            echo -e "${BLUE}ℹ️  Law file already exists: ${PROJECT_GCC_DIR}/law-enforcer.yaml${NC}"
+            echo -e "${BLUE}ℹ️  Law file already exists: ${PROJECT_GCC_DIR}/law-enforcer.json${NC}"
         fi
     else
         echo -e "${YELLOW}ℹ️  .GCC not found in project. After 'opencontext init', run 'opencontext law init'.${NC}"
@@ -187,7 +187,7 @@ echo -e "${YELLOW}📁 Creating project plugin structure...${NC}"
 mkdir -p "${HOME}/.local/share/opencontext/templates"
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/opencontext-reminder.js" \
    "${HOME}/.local/share/opencontext/templates/"
-cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.yaml" \
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.json" \
    "${HOME}/.local/share/opencontext/templates/"
 
 echo -e "${GREEN}✓ Templates created${NC}"

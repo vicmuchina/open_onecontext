@@ -51,7 +51,7 @@ With `--local`, these are also created in your project:
 ```
 /path/to/project/.opencode/plugins/opencontext-reminder.js
 /path/to/project/.opencode/skills/opencontext/SKILL.md
-/path/to/project/.GCC/law-enforcer.yaml   # if .GCC already exists
+/path/to/project/.GCC/law-enforcer.json   # if .GCC already exists
 ```
 
 ### Plugin Loading Note
@@ -132,11 +132,20 @@ export CHUTES_API_KEY="<your_api_key>"
 export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
 ```
 
-You can also edit `.GCC/law-enforcer.yaml` and change:
+You can also edit `.GCC/law-enforcer.json` and change:
 
-```yaml
-critic:
-  model: <any_chutes_model_id>
+```json
+{
+  "critic": {
+    "model": "<any_chutes_model_id>"
+  }
+}
+```
+
+Watchman trace logs are written to:
+
+```bash
+.GCC/law-enforcer-trace.jsonl
 ```
 
 ## Setup Commands

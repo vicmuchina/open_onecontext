@@ -143,7 +143,7 @@ ls -la .opencode/plugins/opencontext-reminder.js
 ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 
 # Check law policy (after opencontext init + opencontext law init)
-ls -la .GCC/law-enforcer.yaml
+ls -la .GCC/law-enforcer.json
 ```
 
 ### Plugin Development and Debugging
@@ -161,8 +161,14 @@ node ./scripts/test-opencode-plugin-law.mjs
 # Run assistant-turn watchman interruption test (model mocked)
 node ./scripts/test-opencode-plugin-watchman.mjs
 
+# Run watchman trace logging test (request/response + tool evidence)
+node ./scripts/test-opencode-plugin-trace.mjs
+
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
+
+# Run live watchman trace test (requires CHUTES_API_KEY)
+CHUTES_API_KEY=... ./scripts/test-opencode-watchman-trace-live.sh
 
 # Manual debug logs
 opencode --print-logs --log-level DEBUG run "plugin smoke test"
@@ -217,11 +223,20 @@ export CHUTES_API_KEY="<your_chutes_api_key>"
 export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
 ```
 
-You can also change the model directly in `.GCC/law-enforcer.yaml`:
+You can also change the model directly in `.GCC/law-enforcer.json`:
 
-```yaml
-critic:
-  model: openai/gpt-oss-120b-TEE
+```json
+{
+  "critic": {
+    "model": "openai/gpt-oss-120b-TEE"
+  }
+}
+```
+
+Watchman request/response traces are persisted to:
+
+```bash
+.GCC/law-enforcer-trace.jsonl
 ```
 
 ### 3. Daily Workflow

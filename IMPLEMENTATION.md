@@ -13,7 +13,7 @@ One-time prompt injection is not sufficient in long coding sessions. Agents ofte
 ## v2 Solution Overview (Active Watchman)
 The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement is upgraded to active inspection:
 
-1. Load law policy from `.GCC/law-enforcer.yaml`
+1. Load law policy from `.GCC/law-enforcer.json` (with backward-compatible YAML fallback)
 2. Track session state with recent messages + recent tool activity
 3. Continuously inspect behavior during:
    - `session.created` (initial obligations and context)
@@ -40,7 +40,12 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
 
 ## Law File
 Primary file:
-- `.GCC/law-enforcer.yaml`
+- `.GCC/law-enforcer.json`
+- Format: standard JSON config (opencode-style) for easier editing and tooling.
+
+Trace file:
+- `.GCC/law-enforcer-trace.jsonl`
+- Contains watchman request/response records plus captured tool-execution evidence used by the inspector.
 
 CLI support:
 - `opencontext law init`
@@ -67,7 +72,7 @@ One-command install still installs:
 
 Also:
 - Installs policy template files
-- Initializes `.GCC/law-enforcer.yaml` for local project installs when `.GCC` exists
+- Initializes `.GCC/law-enforcer.json` for local project installs when `.GCC` exists
 
 ## Test Contract
 Must pass:
@@ -75,6 +80,7 @@ Must pass:
 - deterministic research reminder test
 - deterministic interruption test
 - new assistant-turn watchman interruption test
+- new watchman trace logging test (request/response + tool evidence)
 
 ## Non-Goals (Current)
 - Hard stop/block on session completion

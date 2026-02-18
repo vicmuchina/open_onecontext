@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import click
+import json
 import yaml
 from rich.console import Console
 from rich.panel import Panel
@@ -306,7 +307,31 @@ def plugin_path():
 
 
 def _default_law_path() -> Path:
+    return Path.cwd() / ".GCC" / "law-enforcer.json"
+
+
+def _legacy_law_path() -> Path:
     return Path.cwd() / ".GCC" / "law-enforcer.yaml"
+
+
+def _resolve_law_path(path: Optional[Path] = None) -> Path:
+    if path is not None:
+        return path
+    primary = _default_law_path()
+    if primary.exists():
+        return primary
+    legacy = _legacy_law_path()
+    if legacy.exists():
+        return legacy
+    return primary
+
+
+def _read_law_file(law_path: Path) -> Dict:
+    with open(law_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+    if law_path.suffix.lower() == ".json":
+        return json.loads(raw or "{}")
+    return yaml.safe_load(raw) or {}
 
 
 def _validate_law_content(law: Dict) -> List[str]:
@@ -355,7 +380,7 @@ def law():
 @law.command("init")
 @click.option("--force", is_flag=True, help="Overwrite existing law file")
 def law_init(force: bool):
-    """Create .GCC/law-enforcer.yaml from the packaged template."""
+    """Create .GCC/law-enforcer.json from the packaged template."""
     import opencontext
     import shutil
 
@@ -364,16 +389,24 @@ def law_init(force: bool):
         console.print("[red]Error: GCC not initialized. Run 'opencontext init' first.[/red]")
         raise click.Abort()
 
-    template_source = Path(opencontext.__file__).parent / "plugin" / "law-enforcer.yaml"
+    template_source = Path(opencontext.__file__).parent / "plugin" / "law-enforcer.json"
     if not template_source.exists():
         console.print("[red]Error: Law template not found in package.[/red]")
         raise click.Abort()
 
     law_path = _default_law_path()
-    if law_path.exists() and not force:
-        console.print(f"[yellow]Law file already exists:[/yellow] {law_path}")
+    legacy_path = _legacy_law_path()
+    existing_path = law_path if law_path.exists() else legacy_path if legacy_path.exists() else None
+    if existing_path and not force:
+        console.print(f"[yellow]Law file already exists:[/yellow] {existing_path}")
         console.print("Use --force to overwrite.")
         return
+
+    if existing_path and force and existing_path != law_path:
+        try:
+            existing_path.unlink()
+        except Exception:
+            pass
 
     shutil.copy2(template_source, law_path)
     console.print(f"[green]✓ Law file initialized:[/green] {law_path}")
@@ -381,19 +414,18 @@ def law_init(force: bool):
 
 
 @law.command("validate")
-@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law YAML file")
+@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law JSON/YAML file")
 def law_validate(law_path_opt: Optional[Path]):
     """Validate law policy file syntax and core schema."""
-    law_path = law_path_opt or _default_law_path()
+    law_path = _resolve_law_path(law_path_opt)
     if not law_path.exists():
         console.print(f"[red]Error: Law file not found:[/red] {law_path}")
         raise click.Abort()
 
     try:
-        with open(law_path, "r", encoding="utf-8") as f:
-            law_data = yaml.safe_load(f) or {}
+        law_data = _read_law_file(law_path)
     except Exception as e:
-        console.print(f"[red]Error parsing YAML:[/red] {e}")
+        console.print(f"[red]Error parsing law file:[/red] {e}")
         raise click.Abort()
 
     errors = _validate_law_content(law_data)
@@ -407,10 +439,10 @@ def law_validate(law_path_opt: Optional[Path]):
 
 
 @law.command("status")
-@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law YAML file")
+@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law JSON/YAML file")
 def law_status(law_path_opt: Optional[Path]):
     """Show Law Enforcer policy status."""
-    law_path = law_path_opt or _default_law_path()
+    law_path = _resolve_law_path(law_path_opt)
     exists = law_path.exists()
 
     if not exists:
@@ -422,8 +454,7 @@ def law_status(law_path_opt: Optional[Path]):
         return
 
     try:
-        with open(law_path, "r", encoding="utf-8") as f:
-            law_data = yaml.safe_load(f) or {}
+        law_data = _read_law_file(law_path)
     except Exception as e:
         console.print(f"[red]Error parsing law file:[/red] {e}")
         raise click.Abort()
@@ -460,7 +491,7 @@ def setup_opencode(global_install: bool):
     # Get plugin and skill source paths
     package_dir = Path(opencontext.__file__).parent
     plugin_source = package_dir / "plugin" / "opencontext-reminder.js"
-    law_source = package_dir / "plugin" / "law-enforcer.yaml"
+    law_source = package_dir / "plugin" / "law-enforcer.json"
     skill_source = package_dir.parent / "docs" / "SKILL.md"
     
     if not plugin_source.exists():
@@ -503,7 +534,7 @@ def setup_opencode(global_install: bool):
 
             # Law template in .GCC if project is initialized
             gcc_dir = Path.cwd() / ".GCC"
-            law_target = gcc_dir / "law-enforcer.yaml"
+            law_target = gcc_dir / "law-enforcer.json"
             if gcc_dir.exists() and law_source.exists() and not law_target.exists():
                 shutil.copy2(law_source, law_target)
                 console.print(f"[green]✓ Law file initialized: {law_target}[/green]")
