@@ -2,14 +2,19 @@
 
 This repository contains the OpenContext system (GCC memory workflow) plus the OpenCode Law Enforcer plugin that actively inspects agent behavior and interrupts when workflow laws are violated.
 
-Start here:
-- `PROJECT_BLUEPRINT.md` - purpose, goals, architecture, and operating contracts
-- `HOOKS_AND_ENFORCEMENT.md` - exact plugin hook behavior and interruption flow
-- `AGENT_WORKFLOW.md` - practical day-to-day workflow for coding agents and humans
-- `INSTALLATION.md` - one-command install and local setup
-- `opencontext/README.md` - full user and CLI reference
-- `SPEC.md` - detailed technical spec
-- `IMPLEMENTATION.md` - implementation decisions and scope
+## Documentation Map
+
+- `README.md` - repo entry point and quick navigation.
+- `PROJECT_BLUEPRINT.md` - project purpose, goals, architecture, core contracts, and acceptance checklist.
+- `HOOKS_AND_ENFORCEMENT.md` - how each OpenCode hook works and how interruption/enforcement is triggered.
+- `AGENT_WORKFLOW.md` - day-to-day runbook for agents/humans (session flow, commits, debugging, regression checks).
+- `INSTALLATION.md` - install/uninstall, one-command setup, local setup, and troubleshooting.
+- `SPEC.md` - detailed technical specification and data model.
+- `IMPLEMENTATION.md` - implementation decisions, scope, and behavior guarantees.
+- `opencontext/README.md` - full end-user guide for OpenContext CLI + plugin usage.
+- `opencontext/TEST_RESULTS.md` - recorded test runs and verification snapshots.
+- `opencontext/docs/SKILL.md` - OpenCode skill instructions for using OpenContext in agent sessions.
+- `opencontext/docs/papers/GCC_Paper_2508.00031.md` - local copy/notes of the GCC paper reference.
 
 Quick install:
 
