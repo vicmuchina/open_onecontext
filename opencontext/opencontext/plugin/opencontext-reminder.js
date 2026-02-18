@@ -1,38 +1,107 @@
 /**
- * OpenContext Plugin for OpenCode
+ * OpenContext Law Enforcer Plugin for OpenCode
  *
- * Provides contextual reminders for OpenContext/GCC usage.
+ * Keeps original plugin file name for compatibility while upgrading behavior from
+ * advisory reminders to continuous, interrupt-and-continue enforcement.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 
 const CONFIG = {
-  reminderFrequency: 5,
   contextWarningThreshold: 80,
   researchReminderCooldownMs: 30000,
   gccDir: ".GCC",
+  lawFileName: "law-enforcer.yaml",
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
+  lawCacheMs: 5000,
+  maxRecentTools: 12,
 };
 
-const recentTools = [];
-let toolExecutionCount = 0;
+const DEFAULT_LAW = {
+  version: 1,
+  mode: "interrupt_continue",
+  cooldowns: {
+    interruptionSeconds: 45,
+    sameRuleSeconds: 120,
+  },
+  limits: {
+    maxConsecutiveInjections: 4,
+  },
+  gcc: {
+    requireInit: true,
+    requireCheckpointEveryTools: 6,
+    requireFailedAttemptLookup: true,
+    compactionCheckpointRequired: true,
+  },
+  mcp: {
+    requireAwarenessAtSessionStart: true,
+    requireUseWhenRelevant: true,
+    usageReminderEveryTools: 4,
+  },
+  research: {
+    requireCaptureOnDocsOrGithub: true,
+    docsKeywords: ["docs", "readme", "documentation", "arxiv.org"],
+  },
+  critic: {
+    enabled: true,
+    provider: "openai_compatible",
+    baseUrl: "https://llm.chutes.ai/v1",
+    model: "openai/gpt-oss-120b-TEE",
+    apiKeyEnv: "OPENCONTEXT_LAW_API_KEY",
+    timeoutMs: 3500,
+  },
+};
+
+const sessionStateById = new Map();
+let activeSessionId = "";
 let lastContextWarningPercent = 0;
-let lastResearchReminderTime = 0;
 let messageUpdateCount = 0;
 let contextCache = {
   fetchedAt: 0,
   data: null,
 };
+let lawCache = {
+  fetchedAt: 0,
+  path: "",
+  data: null,
+};
+let mcpNamesCache = {
+  fetchedAt: 0,
+  data: [],
+};
 
-function getRecentTools(n) {
-  return recentTools.slice(-n);
+function getSessionState(sessionId) {
+  const resolvedSessionId = sessionId || "__default__";
+  if (!sessionStateById.has(resolvedSessionId)) {
+    sessionStateById.set(resolvedSessionId, {
+      sessionId: resolvedSessionId,
+      toolExecutionCount: 0,
+      sinceCommitCount: 0,
+      lastInjectionAt: 0,
+      lastRuleInjectionAt: {},
+      consecutiveInjections: 0,
+      lastResearchReminderTime: 0,
+      pendingCompactionCheckpoint: false,
+      pendingResearchCapture: false,
+      pendingFailureLookup: false,
+      mcpUsed: false,
+      recentTools: [],
+      lastAgent: undefined,
+      lastModel: undefined,
+      hasViolationDebt: false,
+    });
+  }
+  return sessionStateById.get(resolvedSessionId);
 }
 
-function addRecentTool(tool) {
-  recentTools.push(tool);
-  if (recentTools.length > 10) recentTools.shift();
+function appendRecentTool(state, tool) {
+  state.recentTools.push(tool);
+  if (state.recentTools.length > CONFIG.maxRecentTools) {
+    state.recentTools.shift();
+  }
 }
 
 function isGCCInitialized(directory) {
@@ -56,25 +125,8 @@ function toToolName(toolLike) {
   return "unknown";
 }
 
-function generateCommitSuggestion(tool, args) {
-  const recent = getRecentTools(5);
-
-  if (tool === "edit" && args?.filePath) {
-    return `Updated ${args.filePath.split("/").pop()}`;
-  }
-  if (recent.filter((t) => t === "edit").length >= 2) {
-    return "Implemented multiple file changes";
-  }
-  if (recent.includes("bash")) {
-    return "Implemented and validated changes";
-  }
-  if (recent.some((t) => t === "webfetch" || t === "websearch")) {
-    return "Researched and gathered information";
-  }
-  if (recent.filter((t) => t === "read").length >= 3) {
-    return "Analyzed codebase structure";
-  }
-  return "Checkpoint progress";
+function toLowerSafe(value) {
+  return String(value ?? "").toLowerCase();
 }
 
 function extractUrls(text) {
@@ -83,33 +135,163 @@ function extractUrls(text) {
   return matches ? Array.from(new Set(matches)) : [];
 }
 
-function detectResearchSignal(tool, args, toolOutput) {
-  const toolName = String(tool || "").toLowerCase();
-  const isResearchTool =
-    toolName.includes("webfetch") ||
-    toolName.includes("google_search") ||
-    toolName.includes("websearch") ||
-    toolName.includes("search");
-  if (!isResearchTool) return null;
+function shallowClone(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return [...value];
+  return { ...value };
+}
 
-  const argBlob = typeof args === "string" ? args : JSON.stringify(args || {});
-  const outputBlob = typeof toolOutput === "string" ? toolOutput : "";
-  const corpus = `${argBlob}\n${outputBlob}`.toLowerCase();
+function deepMerge(base, override) {
+  if (!override || typeof override !== "object") return shallowClone(base);
+  const output = Array.isArray(base) ? [...base] : { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      output[key] &&
+      typeof output[key] === "object" &&
+      !Array.isArray(output[key])
+    ) {
+      output[key] = deepMerge(output[key], value);
+    } else {
+      output[key] = shallowClone(value);
+    }
+  }
+  return output;
+}
 
-  const hasGithub = corpus.includes("github.com");
-  const hasDocs =
-    corpus.includes("/docs") ||
-    corpus.includes("docs.") ||
-    corpus.includes("documentation") ||
-    corpus.includes("readme") ||
-    corpus.includes("arxiv.org");
+function parseScalar(rawValue) {
+  const value = rawValue.trim();
+  if (!value) return "";
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return value
+      .slice(1, -1)
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .map((v) => {
+        if (
+          (v.startsWith('"') && v.endsWith('"')) ||
+          (v.startsWith("'") && v.endsWith("'"))
+        ) {
+          return v.slice(1, -1);
+        }
+        return v;
+      });
+  }
+  return value;
+}
 
-  if (!hasGithub && !hasDocs) return null;
+function parseYamlLike(content) {
+  const root = {};
+  const stack = [{ indent: -1, obj: root }];
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const match = line.match(/^(\s*)([^:#][^:]*):\s*(.*)$/);
+    if (!match) continue;
+    const indent = match[1].length;
+    const key = match[2].trim();
+    const raw = match[3];
 
-  return {
-    sourceType: hasGithub && hasDocs ? "github+docs" : hasGithub ? "github" : "docs",
-    urls: extractUrls(`${argBlob}\n${outputBlob}`).slice(0, 3),
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
+      stack.pop();
+    }
+    const parent = stack[stack.length - 1].obj;
+    if (!raw.trim()) {
+      parent[key] = {};
+      stack.push({ indent, obj: parent[key] });
+    } else {
+      parent[key] = parseScalar(raw);
+    }
+  }
+  return root;
+}
+
+function sanitizeLaw(law) {
+  const sanitized = deepMerge(DEFAULT_LAW, law || {});
+  if (!Number.isFinite(sanitized.gcc.requireCheckpointEveryTools)) {
+    sanitized.gcc.requireCheckpointEveryTools = DEFAULT_LAW.gcc.requireCheckpointEveryTools;
+  }
+  sanitized.gcc.requireCheckpointEveryTools = Math.max(
+    2,
+    Math.min(50, Math.round(sanitized.gcc.requireCheckpointEveryTools))
+  );
+  if (!Number.isFinite(sanitized.mcp.usageReminderEveryTools)) {
+    sanitized.mcp.usageReminderEveryTools = DEFAULT_LAW.mcp.usageReminderEveryTools;
+  }
+  sanitized.mcp.usageReminderEveryTools = Math.max(
+    2,
+    Math.min(25, Math.round(sanitized.mcp.usageReminderEveryTools))
+  );
+  sanitized.cooldowns.interruptionSeconds = Math.max(
+    5,
+    Math.min(1800, Number(sanitized.cooldowns.interruptionSeconds || 45))
+  );
+  sanitized.cooldowns.sameRuleSeconds = Math.max(
+    10,
+    Math.min(3600, Number(sanitized.cooldowns.sameRuleSeconds || 120))
+  );
+  sanitized.limits.maxConsecutiveInjections = Math.max(
+    1,
+    Math.min(20, Number(sanitized.limits.maxConsecutiveInjections || 4))
+  );
+  sanitized.critic.timeoutMs = Math.max(
+    500,
+    Math.min(10000, Number(sanitized.critic.timeoutMs || 3500))
+  );
+  if (!Array.isArray(sanitized.research.docsKeywords)) {
+    sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
+  }
+  return sanitized;
+}
+
+function getLawPath(directory) {
+  return join(directory, CONFIG.gccDir, CONFIG.lawFileName);
+}
+
+async function loadLaw(client, directory) {
+  const lawPath = getLawPath(directory);
+  if (
+    lawCache.data &&
+    lawCache.path === lawPath &&
+    Date.now() - lawCache.fetchedAt < CONFIG.lawCacheMs
+  ) {
+    return lawCache.data;
+  }
+
+  let parsed = {};
+  if (existsSync(lawPath)) {
+    try {
+      const raw = readFileSync(lawPath, "utf-8");
+      parsed = parseYamlLike(raw);
+      await log(client, "debug", "law.loaded", { lawPath });
+    } catch (error) {
+      await log(client, "warn", "law.load_failed", {
+        lawPath,
+        error: error?.message ?? String(error),
+      });
+    }
+  } else {
+    await log(client, "debug", "law.default_used", { lawPath });
+  }
+  const law = sanitizeLaw(parsed);
+  lawCache = {
+    fetchedAt: Date.now(),
+    path: lawPath,
+    data: law,
   };
+  return law;
 }
 
 async function log(client, level, message, extra = {}) {
@@ -123,7 +305,7 @@ async function log(client, level, message, extra = {}) {
       },
     });
   } catch {
-    // Ignore logging failures to keep plugin non-blocking.
+    // Keep plugin non-blocking.
   }
 }
 
@@ -144,6 +326,107 @@ async function toast(client, payload) {
       error: error?.message ?? String(error),
     });
   }
+}
+
+function extractSessionIdFromEvent(event) {
+  const props = event?.properties || {};
+  const info = props.info || {};
+  return (
+    props.sessionID ||
+    info.sessionID ||
+    info.id ||
+    ""
+  );
+}
+
+function extractCommandFromArgs(args) {
+  if (typeof args === "string") return args;
+  if (!args || typeof args !== "object") return "";
+  if (typeof args.command === "string") return args.command;
+  if (typeof args.cmd === "string") return args.cmd;
+  if (typeof args.input === "string") return args.input;
+  if (typeof args.script === "string") return args.script;
+  if (Array.isArray(args.command)) return args.command.join(" ");
+  return JSON.stringify(args);
+}
+
+function isOpenContextInitCommand(commandText) {
+  const text = toLowerSafe(commandText);
+  return (text.includes("opencontext") || text.includes("ocx")) && text.includes(" init");
+}
+
+function isOpenContextCommitCommand(commandText) {
+  const text = toLowerSafe(commandText);
+  return (text.includes("opencontext") || text.includes("ocx")) && text.includes(" commit");
+}
+
+function isOpenContextContextLookup(commandText) {
+  const text = toLowerSafe(commandText);
+  return (
+    (text.includes("opencontext") || text.includes("ocx")) &&
+    text.includes(" context") &&
+    (text.includes("--search") || text.includes("--log"))
+  );
+}
+
+function isMcpTool(toolName) {
+  return toLowerSafe(toolName).startsWith("mcp__");
+}
+
+function detectResearchSignal(tool, args, toolOutput, law) {
+  const toolName = toLowerSafe(tool);
+  const isResearchTool =
+    toolName.includes("webfetch") ||
+    toolName.includes("google_search") ||
+    toolName.includes("websearch") ||
+    toolName.includes("search") ||
+    toolName.includes("context7") ||
+    toolName.startsWith("mcp__");
+  if (!isResearchTool) return null;
+
+  const argBlob = typeof args === "string" ? args : JSON.stringify(args || {});
+  const outputBlob = typeof toolOutput === "string" ? toolOutput : JSON.stringify(toolOutput || {});
+  const corpus = `${argBlob}\n${outputBlob}`.toLowerCase();
+
+  const hasGithub = corpus.includes("github.com");
+  const hasDocs = law.research.docsKeywords.some((kw) => corpus.includes(toLowerSafe(kw)));
+  if (!hasGithub && !hasDocs) return null;
+
+  return {
+    sourceType: hasGithub && hasDocs ? "github+docs" : hasGithub ? "github" : "docs",
+    urls: extractUrls(`${argBlob}\n${outputBlob}`).slice(0, 3),
+  };
+}
+
+function detectFailureSignal(tool, output) {
+  const toolName = toLowerSafe(tool);
+  if (toolName.includes("read")) return false;
+  const blob = typeof output === "string" ? output : JSON.stringify(output || {});
+  const text = toLowerSafe(blob);
+  return (
+    text.includes("error") ||
+    text.includes("failed") ||
+    text.includes("traceback") ||
+    text.includes("exception") ||
+    text.includes("assertionerror") ||
+    text.includes("test failed")
+  );
+}
+
+function shouldIncrementCheckpointDebt(tool, commandText) {
+  const t = toLowerSafe(tool);
+  if (isOpenContextCommitCommand(commandText) || isOpenContextContextLookup(commandText)) {
+    return false;
+  }
+  return (
+    t.includes("edit") ||
+    t.includes("write") ||
+    t.includes("multiedit") ||
+    t.includes("bash") ||
+    t.includes("webfetch") ||
+    t.includes("search") ||
+    t.startsWith("mcp__")
+  );
 }
 
 async function getGCCContext(directory, client) {
@@ -186,14 +469,285 @@ async function getCachedGCCContext(directory, client) {
   return data;
 }
 
+function buildViolationPrompt({ rule, detail, commands }) {
+  const commandBlock = commands.length > 0
+    ? commands.map((cmd) => `- ${cmd}`).join("\n")
+    : "- Continue with compliant workflow";
+  return [
+    "OpenContext Law Enforcer interruption:",
+    `Rule violated: ${rule}`,
+    `Reason: ${detail}`,
+    "",
+    "Do these before continuing normal work:",
+    commandBlock,
+    "",
+    "After completing the required actions, continue implementation.",
+  ].join("\n");
+}
+
+async function injectContinuation(client, directory, state, text) {
+  const sessionId = state?.sessionId || activeSessionId;
+  if (!sessionId) return false;
+
+  const body = {
+    parts: [{ type: "text", text }],
+  };
+  if (state?.lastAgent) body.agent = state.lastAgent;
+  if (state?.lastModel) body.model = state.lastModel;
+
+  try {
+    if (client?.session?.promptAsync) {
+      await client.session.promptAsync({
+        path: { id: sessionId },
+        body,
+        query: { directory },
+      });
+      return true;
+    }
+    if (client?.session?.prompt) {
+      await client.session.prompt({
+        path: { id: sessionId },
+        body,
+        query: { directory },
+      });
+      return true;
+    }
+    return false;
+  } catch (error) {
+    await log(client, "warn", "law.inject_failed", {
+      sessionId,
+      error: error?.message ?? String(error),
+    });
+    return false;
+  }
+}
+
+async function getAvailableMcpNames() {
+  if (Date.now() - mcpNamesCache.fetchedAt < 15000 && mcpNamesCache.data.length > 0) {
+    return mcpNamesCache.data;
+  }
+  try {
+    const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+    if (!existsSync(configPath)) return [];
+    const raw = readFileSync(configPath, "utf-8");
+    const json = JSON.parse(raw);
+    const mcp = json?.mcp || {};
+    const names = Object.entries(mcp)
+      .filter(([, config]) => config && config.enabled !== false)
+      .map(([name]) => name)
+      .slice(0, 10);
+    mcpNamesCache = {
+      fetchedAt: Date.now(),
+      data: names,
+    };
+    return names;
+  } catch {
+    return [];
+  }
+}
+
+async function runCriticCheck(client, law, payload) {
+  if (!law.critic.enabled) return { enforce: true, source: "disabled" };
+  const envName = law.critic.apiKeyEnv || "OPENCONTEXT_LAW_API_KEY";
+  const apiKey = process.env[envName];
+  if (!apiKey) return { enforce: true, source: "no_api_key" };
+
+  const timeoutMs = law.critic.timeoutMs || 3500;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${law.critic.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: law.critic.model,
+        temperature: 0,
+        max_tokens: 120,
+        messages: [
+          {
+            role: "system",
+            content:
+              'Return strict JSON only: {"enforce":true|false,"reason":"<short>"}',
+          },
+          {
+            role: "user",
+            content: JSON.stringify(payload),
+          },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      return { enforce: true, source: "http_error" };
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+    const match = String(text).match(/\{[\s\S]*\}/);
+    if (!match) return { enforce: true, source: "parse_missing_json" };
+    const parsed = JSON.parse(match[0]);
+    const enforce = parsed?.enforce !== false;
+    return { enforce, source: "critic", reason: parsed?.reason || "" };
+  } catch {
+    return { enforce: true, source: "critic_error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function maybeInterrupt(client, directory, law, state, violation) {
+  const now = Date.now();
+  const minGap = law.cooldowns.interruptionSeconds * 1000;
+  const sameRuleGap = law.cooldowns.sameRuleSeconds * 1000;
+  const lastForRule = state.lastRuleInjectionAt[violation.rule] || 0;
+
+  if (now - state.lastInjectionAt < minGap) return false;
+  if (now - lastForRule < sameRuleGap) return false;
+  if (state.consecutiveInjections >= law.limits.maxConsecutiveInjections) return false;
+
+  let enforce = true;
+  if (violation.useCritic) {
+    const verdict = await runCriticCheck(client, law, {
+      rule: violation.rule,
+      detail: violation.detail,
+      recentTools: state.recentTools.slice(-5),
+    });
+    enforce = verdict.enforce;
+    await log(client, "info", "law.critic.verdict", {
+      rule: violation.rule,
+      enforce,
+      source: verdict.source,
+      reason: verdict.reason || "",
+    });
+  }
+  if (!enforce) return false;
+
+  const prompt = buildViolationPrompt(violation);
+  const injected = await injectContinuation(client, directory, state, prompt);
+  if (injected) {
+    state.lastInjectionAt = now;
+    state.lastRuleInjectionAt[violation.rule] = now;
+    state.consecutiveInjections += 1;
+    state.hasViolationDebt = true;
+    await log(client, "warn", "law.interrupt.injected", {
+      sessionId: state.sessionId,
+      rule: violation.rule,
+      detail: violation.detail,
+    });
+  }
+  await toast(client, {
+    type: "warning",
+    timeout: 9000,
+    message: `⚖️ Law Enforcer: ${violation.rule}\n${violation.detail}`,
+  });
+  return injected;
+}
+
+function buildViolations({ directory, law, state, tool, commandText, toolOutput, hasGCC }) {
+  const violations = [];
+  const checkpointEvery = law.gcc.requireCheckpointEveryTools;
+
+  if (law.gcc.requireInit && !hasGCC) {
+    violations.push({
+      rule: "gcc_init_required",
+      detail: "GCC is not initialized in this project directory.",
+      commands: ['opencontext init --project-name "<name>" --goal "<goal>"'],
+      useCritic: false,
+    });
+    return violations;
+  }
+
+  if (law.gcc.compactionCheckpointRequired && state.pendingCompactionCheckpoint) {
+    violations.push({
+      rule: "compaction_checkpoint_required",
+      detail: "Session compaction occurred and checkpoint debt is still open.",
+      commands: [
+        'opencontext commit "Post-compaction checkpoint"',
+        'opencontext context --log --lines 80',
+      ],
+      useCritic: false,
+    });
+  }
+
+  if (
+    state.sinceCommitCount >= checkpointEvery &&
+    isGCCInitialized(directory)
+  ) {
+    violations.push({
+      rule: "checkpoint_overdue",
+      detail: `More than ${checkpointEvery} significant tool calls occurred without a GCC checkpoint.`,
+      commands: ['opencontext commit "Checkpoint after significant progress"'],
+      useCritic: false,
+    });
+  }
+
+  if (
+    law.gcc.requireFailedAttemptLookup &&
+    state.pendingFailureLookup &&
+    !isOpenContextContextLookup(commandText)
+  ) {
+    const toolLower = toLowerSafe(tool);
+    if (toolLower.includes("edit") || toolLower.includes("write") || toolLower.includes("bash")) {
+      violations.push({
+        rule: "failed_attempt_lookup_required",
+        detail: "A failure was detected. Retrieve previous attempts before retrying.",
+        commands: ['opencontext context --search "<feature or failure>"', "opencontext context --log --lines 80"],
+        useCritic: true,
+      });
+    }
+  }
+
+  if (
+    law.research.requireCaptureOnDocsOrGithub &&
+    state.pendingResearchCapture &&
+    !isOpenContextCommitCommand(commandText)
+  ) {
+    violations.push({
+      rule: "research_capture_required",
+      detail: "Documentation/GitHub research was detected but not checkpointed.",
+      commands: ['opencontext commit "Research findings on <topic>"'],
+      useCritic: false,
+    });
+  }
+
+  if (law.mcp.requireUseWhenRelevant && !state.mcpUsed) {
+    const interval = law.mcp.usageReminderEveryTools;
+    const t = toLowerSafe(tool);
+    const researchLike = t.includes("search") || t.includes("webfetch") || state.pendingResearchCapture;
+    if (researchLike && state.toolExecutionCount % interval === 0) {
+      violations.push({
+        rule: "mcp_usage_expected",
+        detail: "Task pattern suggests MCP tools could help, but none were used recently.",
+        commands: ["Review available MCPs and use a relevant MCP tool before continuing."],
+        useCritic: true,
+      });
+    }
+  }
+
+  return violations;
+}
+
 export const OpenContextPlugin = async ({ client, directory }) => {
   await log(client, "info", "plugin initialized", { directory });
 
   return {
     event: async ({ event }) => {
+      const law = await loadLaw(client, directory);
+      const sessionId = extractSessionIdFromEvent(event);
+      if (sessionId) {
+        activeSessionId = sessionId;
+      }
+      const state = getSessionState(sessionId || activeSessionId);
+
       if (event.type === "session.created") {
         await log(client, "debug", "event session.created");
-        if (!isGCCInitialized(directory)) {
+        if (state) {
+          state.consecutiveInjections = 0;
+        }
+        const hasGCC = isGCCInitialized(directory);
+        if (!hasGCC) {
           await log(client, "debug", "gcc not initialized", { directory });
           await toast(client, {
             message:
@@ -201,27 +755,40 @@ export const OpenContextPlugin = async ({ client, directory }) => {
             type: "info",
             timeout: 10000,
           });
-          return;
+        } else {
+          const gccInfo = await getCachedGCCContext(directory, client);
+          if (gccInfo) {
+            const branch = parseBranchFromStatus(gccInfo.status);
+            const lastCommit = parseLastCommitFromStatus(gccInfo.status);
+            await toast(client, {
+              message: `📦 GCC Context Loaded\nBranch: ${branch}\nLast: ${lastCommit.substring(0, 40)}...`,
+              type: "info",
+              timeout: 8000,
+            });
+            await log(client, "info", "gcc context loaded", {
+              branch,
+              hasCommit: lastCommit !== "none",
+            });
+          }
         }
 
-        const gccInfo = await getCachedGCCContext(directory, client);
-        if (!gccInfo) return;
-
-        const branch = parseBranchFromStatus(gccInfo.status);
-        const lastCommit = parseLastCommitFromStatus(gccInfo.status);
-        await toast(client, {
-          message: `📦 GCC Context Loaded\nBranch: ${branch}\nLast: ${lastCommit.substring(0, 40)}...`,
-          type: "info",
-          timeout: 8000,
-        });
-        await log(client, "info", "gcc context loaded", {
-          branch,
-          hasCommit: lastCommit !== "none",
-        });
+        if (law.mcp.requireAwarenessAtSessionStart) {
+          const mcpNames = await getAvailableMcpNames();
+          const summary = mcpNames.length > 0 ? mcpNames.join(", ") : "none discovered";
+          await toast(client, {
+            type: "info",
+            timeout: 9000,
+            message: `🧰 MCP awareness check\nAvailable MCPs: ${summary}\nUse MCPs when relevant before defaulting to generic tools.`,
+          });
+        }
       }
 
       if (event.type === "session.compacted") {
         await log(client, "debug", "event session.compacted");
+        if (state) {
+          state.pendingCompactionCheckpoint = true;
+          state.hasViolationDebt = true;
+        }
         if (!isGCCInitialized(directory)) {
           await toast(client, {
             message:
@@ -240,6 +807,14 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       }
 
       if (event.type === "message.updated") {
+        const info = event?.properties?.info || {};
+        const infoSessionId = info.sessionID || sessionId;
+        const infoState = getSessionState(infoSessionId || activeSessionId);
+        if (infoState) {
+          if (typeof info.agent === "string") infoState.lastAgent = info.agent;
+          if (info.model && typeof info.model === "object") infoState.lastModel = info.model;
+        }
+
         if (!isGCCInitialized(directory)) return;
         messageUpdateCount += 1;
         const contextPercent = Math.min(100, Math.round((messageUpdateCount / 50) * 100));
@@ -261,62 +836,77 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         }
       }
 
-      if (event.type === "session.idle") {
-        await log(client, "debug", "event session.idle", { toolExecutionCount });
-        if (!isGCCInitialized(directory) || toolExecutionCount <= 10) return;
-        await toast(client, {
-          message: `⏸️ Session idle after ${toolExecutionCount} actions.\nConsider: opencontext commit "Session checkpoint"`,
-          type: "info",
-          timeout: 8000,
+      if (event.type === "session.idle" && state) {
+        await log(client, "debug", "event session.idle", { toolExecutionCount: state.toolExecutionCount });
+        if (!isGCCInitialized(directory) || state.toolExecutionCount <= 2) return;
+
+        const violations = buildViolations({
+          directory,
+          law,
+          state,
+          tool: "idle",
+          commandText: "",
+          toolOutput: "",
+          hasGCC: isGCCInitialized(directory),
         });
+        if (violations.length > 0) {
+          await maybeInterrupt(client, directory, law, state, violations[0]);
+        } else {
+          await toast(client, {
+            message: `⏸️ Session idle after ${state.toolExecutionCount} actions.\nConsider: opencontext commit "Session checkpoint"`,
+            type: "info",
+            timeout: 8000,
+          });
+          state.consecutiveInjections = 0;
+        }
       }
     },
 
     "experimental.session.compacting": async (_input, output = {}) => {
+      const law = await loadLaw(client, directory);
       await log(client, "debug", "hook experimental.session.compacting");
       const hasGCC = isGCCInitialized(directory);
 
       const reminder = hasGCC
-        ? 'OpenContext reminder: context is being compacted. Commit now with `opencontext commit "<summary>"`, then use `opencontext context --log --lines 80` if you need granular prior steps.'
-        : 'OpenContext reminder: context is being compacted and GCC is not initialized here. Run `opencontext init --project-name "<name>" --goal "<goal>"` before continuing long tasks.';
+        ? `OpenContext Law Enforcer: context is being compacted. Required: \`opencontext commit "<summary>"\`, then \`opencontext context --log --lines 80\`. Mode=${law.mode}.`
+        : 'OpenContext Law Enforcer: GCC is not initialized. Run `opencontext init --project-name "<name>" --goal "<goal>"` before continuing long tasks.';
       output.context = Array.isArray(output.context) ? output.context : [];
       output.context.push(reminder);
       return output;
     },
 
     "experimental.chat.system.transform": async (_input, output = {}) => {
+      const law = await loadLaw(client, directory);
       const hasGCC = isGCCInitialized(directory);
       output.system = Array.isArray(output.system) ? output.system : [];
       output.system.push(
-        `OpenContext discipline:
+        `OpenContext Law Contract:
+- Mode: ${law.mode}
 - Keep long-horizon context externalized via OpenContext.
-- If GCC is not initialized in this directory, initialize immediately:
-  opencontext init --project-name "<name>" --goal "<goal>"
-- After significant tool calls (edit/test/research), checkpoint progress.
-- Before retrying failed implementations, retrieve prior attempts from OpenContext.`
+- After significant tool calls (edit/test/research), checkpoint with opencontext commit.
+- Before retrying failed implementations, retrieve previous attempts via opencontext context --search/--log.
+- Use relevant MCP tools when they can improve retrieval, docs grounding, or execution quality.`
       );
 
       if (!hasGCC) {
         await log(client, "debug", "system prompt augmented (no gcc)");
-        return;
-      }
-
-      const gccInfo = await getCachedGCCContext(directory, client);
-      if (!gccInfo) return;
-
-      const branch = parseBranchFromStatus(gccInfo.status);
-      const lastCommit = parseLastCommitFromStatus(gccInfo.status);
-      output.system.push(
-        `OpenContext (GCC) Active:
+      } else {
+        const gccInfo = await getCachedGCCContext(directory, client);
+        if (gccInfo) {
+          const branch = parseBranchFromStatus(gccInfo.status);
+          const lastCommit = parseLastCommitFromStatus(gccInfo.status);
+          output.system.push(
+            `OpenContext (GCC) Active:
 - Current Branch: ${branch}
 - Last Commit: ${lastCommit}
-- Keep OpenContext updated: commit milestones with opencontext commit.
-- After significant tool calls (edit/test/research), checkpoint with opencontext commit.
-- Before retrying an implementation, check previous attempts:
-  opencontext context --search "<feature or failure>"
-  opencontext context --log --lines 80
-- Use opencontext branch/merge/context to track alternatives and outcomes.`
-      );
+- Checkpoint cadence: every ${law.gcc.requireCheckpointEveryTools} significant tool calls.
+- Compaction requires immediate checkpoint + context recovery.
+- Record research findings and failed attempts as first-class context artifacts.`
+          );
+          await log(client, "debug", "system prompt augmented", { branch });
+        }
+      }
+
       const assertToken = process.env.OPENCONTEXT_ASSERT_TOKEN?.trim();
       if (assertToken) {
         output.system.push(
@@ -326,84 +916,103 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           assertToken,
         });
       }
-      await log(client, "debug", "system prompt augmented", { branch });
+      return output;
     },
 
     "tool.execute.after": async (input = {}, output = {}) => {
-      const hasGCC = isGCCInitialized(directory);
-
+      const law = await loadLaw(client, directory);
       const tool = toToolName(input.tool);
       const args = input.args ?? {};
       const toolOutput = output?.output ?? "";
-      addRecentTool(tool);
-      toolExecutionCount += 1;
+      const commandText = extractCommandFromArgs(args);
+      const sessionId = input.sessionID || activeSessionId || "";
+      const state = getSessionState(sessionId || activeSessionId);
+      const hasGCC = isGCCInitialized(directory);
+
+      if (!state) return;
+      if (!activeSessionId && sessionId) activeSessionId = sessionId;
+
+      appendRecentTool(state, tool);
+      state.toolExecutionCount += 1;
+      if (shouldIncrementCheckpointDebt(tool, commandText)) {
+        state.sinceCommitCount += 1;
+      }
 
       await log(client, "debug", "hook tool.execute.after", {
         tool,
-        toolExecutionCount,
+        toolExecutionCount: state.toolExecutionCount,
+        sinceCommitCount: state.sinceCommitCount,
         hasGCC,
       });
 
-      if (toolExecutionCount % CONFIG.reminderFrequency === 0) {
-        if (hasGCC) {
-          const suggestion = generateCommitSuggestion(tool, args);
-          await toast(client, {
-            message: `🎯 ${toolExecutionCount} actions completed.\nSuggestion:\nopencontext commit "${suggestion}"`,
-            type: "info",
-            timeout: 8000,
-          });
-        } else {
-          await toast(client, {
-            message:
-              `🎯 ${toolExecutionCount} actions completed.\nOpenContext is not initialized here.\nRun:\nopencontext init --project-name "<name>" --goal "<goal>"`,
-            type: "info",
-            timeout: 9000,
-          });
-        }
+      if (isMcpTool(tool)) {
+        state.mcpUsed = true;
       }
 
-      if (hasGCC && tool === "edit" && args.filePath) {
-        const file = args.filePath;
-        if (
-          file.includes("README") ||
-          file.includes("config") ||
-          file.endsWith(".py") ||
-          file.endsWith(".js")
-        ) {
-          const filename = file.split("/").pop();
-          await toast(client, {
-            message: `✏️ Modified: ${filename}\nConsider: opencontext commit "Updated ${filename}"`,
-            type: "info",
-            timeout: 7000,
-          });
-        }
+      if (isOpenContextCommitCommand(commandText)) {
+        state.sinceCommitCount = 0;
+        state.pendingCompactionCheckpoint = false;
+        state.pendingResearchCapture = false;
+        state.hasViolationDebt = false;
+        state.consecutiveInjections = 0;
+      }
+      if (isOpenContextContextLookup(commandText)) {
+        state.pendingFailureLookup = false;
+      }
+      if (isOpenContextInitCommand(commandText) && isGCCInitialized(directory)) {
+        state.hasViolationDebt = false;
       }
 
-      const researchSignal = detectResearchSignal(tool, args, toolOutput);
+      const researchSignal = detectResearchSignal(tool, args, toolOutput, law);
       if (researchSignal) {
         await log(client, "info", "research source detected", {
           tool,
           sourceType: researchSignal.sourceType,
           urls: researchSignal.urls,
         });
-
-        const now = Date.now();
-        if (now - lastResearchReminderTime >= CONFIG.researchReminderCooldownMs) {
-          lastResearchReminderTime = now;
-          const firstUrl = researchSignal.urls[0] || "";
-          if (hasGCC) {
+        if (law.research.requireCaptureOnDocsOrGithub) {
+          state.pendingResearchCapture = true;
+          const now = Date.now();
+          if (now - state.lastResearchReminderTime >= CONFIG.researchReminderCooldownMs) {
+            state.lastResearchReminderTime = now;
+            const firstUrl = researchSignal.urls[0] || "";
             await toast(client, {
-              message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nCapture it now:\nopencontext commit "Research findings on <topic>"\nopencontext context --search "<topic>"`,
+              message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nCapture with:\nopencontext commit "Research findings on <topic>"`,
               type: "info",
               timeout: 10000,
             });
-          } else {
-            await toast(client, {
-              message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nInitialize OpenContext first:\nopencontext init --project-name "<name>" --goal "<goal>"\nThen commit findings.`,
-              type: "info",
-              timeout: 11000,
-            });
           }
+        }
+      }
+
+      if (law.gcc.requireFailedAttemptLookup && detectFailureSignal(tool, toolOutput)) {
+        state.pendingFailureLookup = true;
+        state.hasViolationDebt = true;
+      }
+
+      const violations = buildViolations({
+        directory,
+        law,
+        state,
+        tool,
+        commandText,
+        toolOutput,
+        hasGCC,
+      });
+
+      if (violations.length > 0) {
+        await log(client, "warn", "law.violation.detected", {
+          sessionId: state.sessionId,
+          rule: violations[0].rule,
+        });
+        await maybeInterrupt(client, directory, law, state, violations[0]);
+      } else if (state.toolExecutionCount % law.gcc.requireCheckpointEveryTools === 0) {
+        if (hasGCC) {
+          await toast(client, {
+            message: `🎯 ${state.toolExecutionCount} actions completed.\nCheckpoint now:\nopencontext commit "Checkpoint progress"`,
+            type: "info",
+            timeout: 8000,
+          });
         }
       }
     },

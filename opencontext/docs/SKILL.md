@@ -217,14 +217,22 @@ opencontext feedback "The RAG approach is too slow for production"
 ```
 
 ### 4. Context Compaction Response
-When OpenCode compacts context (plugin warns you):
+When OpenCode compacts context (Law Enforcer warns/intervenes):
 ```bash
 opencontext commit "Context compacted - checkpointing progress"
 ```
 
+### 5. Law Policy Operations
+Use project-local law policy for continuous workflow enforcement:
+```bash
+opencontext law init
+opencontext law validate
+opencontext law status
+```
+
 ## Plugin Features
 
-The OpenContext plugin provides contextual reminders:
+The OpenContext plugin now runs a continuous **Law Enforcer** (interrupt + continue):
 
 ### Auto-Discovery
 On session start in GCC project:
@@ -232,20 +240,24 @@ On session start in GCC project:
 - Loads context automatically
 - Shows: "📦 GCC Context Loaded - Branch: main"
 
-### Context Compaction Warning
+### Context Compaction Warning + Enforcement
 When OpenCode compacts context:
-- ⚠️ Shows warning: "Context compacted! Important details may be lost."
-- 💡 Suggests: `opencontext commit '<what was achieved>'`
+- ⚠️ Requires a checkpoint + context recovery workflow
+- 💡 Enforces: `opencontext commit '<summary>'` then `opencontext context --log --lines 80`
 
-### Milestone Reminders
-Every 5 tool executions:
-- 🎯 Shows milestone reached
-- 💡 Suggests relevant commit message
+### Milestone Enforcement
+After configurable significant tool count:
+- 🎯 Detects checkpoint debt
+- ⚖️ Can inject corrective continuation prompts into the active session
 
 ### Context Usage Monitor
 At 80% context usage:
 - 📊 Shows usage percentage
 - 💡 Suggests commit to preserve progress
+
+### Research and MCP Discipline
+- Detects docs/GitHub/arXiv research signals and requires capture in GCC
+- Reminds/enforces MCP usage when tool patterns indicate relevance
 
 ## Troubleshooting
 

@@ -51,6 +51,7 @@ With `--local`, these are also created in your project:
 ```
 /path/to/project/.opencode/plugins/opencontext-reminder.js
 /path/to/project/.opencode/skills/opencontext/SKILL.md
+/path/to/project/.GCC/law-enforcer.yaml   # if .GCC already exists
 ```
 
 ### Plugin Loading Note
@@ -112,7 +113,15 @@ opencode
 The plugin will automatically:
 - Detect `.GCC/` directory
 - Show "GCC Context Loaded" notification
-- Start reminding you to commit at milestones
+- Enforce checkpoint and context-recovery workflow continuously
+
+### 3.5 Initialize Law Policy
+
+```bash
+opencontext law init
+opencontext law validate
+opencontext law status
+```
 
 ## Setup Commands
 
@@ -177,9 +186,9 @@ Once installed, daily workflow is simple:
 # 1. Initialize project (one-time)
 opencontext init --project-name "MyApp"
 
-# 2. Work with OpenCode - plugin auto-reminds you
+# 2. Work with OpenCode - plugin enforces workflow continuously
 
-# 3. Commit when prompted
+# 3. Commit when prompted/enforced
 opencontext commit "Implemented feature X"
 
 # 4. View status
@@ -212,7 +221,7 @@ rm -rf ~/.local/share/opencontext
 ### Plugin
 - Source: `~/.config/opencode/plugins/opencontext-reminder.js`
 - Auto-loaded by OpenCode
-- Provides contextual reminders
+- Provides continuous law enforcement (interrupt + continue)
 
 ### Skill
 - Source: `~/.config/opencode/skills/opencontext/SKILL.md`

@@ -1,0 +1,26 @@
+version: 1
+mode: interrupt_continue
+cooldowns:
+  interruptionSeconds: 45
+  sameRuleSeconds: 120
+limits:
+  maxConsecutiveInjections: 4
+gcc:
+  requireInit: true
+  requireCheckpointEveryTools: 6
+  requireFailedAttemptLookup: true
+  compactionCheckpointRequired: true
+mcp:
+  requireAwarenessAtSessionStart: true
+  requireUseWhenRelevant: true
+  usageReminderEveryTools: 4
+research:
+  requireCaptureOnDocsOrGithub: true
+  docsKeywords: [docs, readme, documentation, arxiv.org]
+critic:
+  enabled: true
+  provider: openai_compatible
+  baseUrl: https://llm.chutes.ai/v1
+  model: openai/gpt-oss-120b-TEE
+  apiKeyEnv: OPENCONTEXT_LAW_API_KEY
+  timeoutMs: 3500

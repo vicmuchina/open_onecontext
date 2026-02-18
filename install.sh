@@ -159,6 +159,19 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
 
     echo -e "${GREEN}✓ Project plugin installed: ${PROJECT_OPENCODE_DIR}/plugins/opencontext-reminder.js${NC}"
     echo -e "${GREEN}✓ Project skill installed: ${PROJECT_OPENCODE_DIR}/skills/opencontext/SKILL.md${NC}"
+
+    PROJECT_GCC_DIR="${PROJECT_DIR}/.GCC"
+    if [[ -d "${PROJECT_GCC_DIR}" ]]; then
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-enforcer.yaml" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.yaml" \
+               "${PROJECT_GCC_DIR}/law-enforcer.yaml"
+            echo -e "${GREEN}✓ Law file initialized: ${PROJECT_GCC_DIR}/law-enforcer.yaml${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Law file already exists: ${PROJECT_GCC_DIR}/law-enforcer.yaml${NC}"
+        fi
+    else
+        echo -e "${YELLOW}ℹ️  .GCC not found in project. After 'opencontext init', run 'opencontext law init'.${NC}"
+    fi
 fi
 
 echo ""
@@ -173,6 +186,8 @@ echo -e "${YELLOW}📁 Creating project plugin structure...${NC}"
 
 mkdir -p "${HOME}/.local/share/opencontext/templates"
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/opencontext-reminder.js" \
+   "${HOME}/.local/share/opencontext/templates/"
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.yaml" \
    "${HOME}/.local/share/opencontext/templates/"
 
 echo -e "${GREEN}✓ Templates created${NC}"
@@ -242,6 +257,7 @@ fi
 echo "  3. Use GCC commands during development:"
 echo "     opencontext commit \"Implemented feature X\""
 echo "     opencontext branch experiment-optimization"
+echo "     opencontext law status"
 echo "     opencontext tui"
 echo ""
 echo -e "${BLUE}Documentation:${NC}"

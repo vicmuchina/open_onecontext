@@ -23,8 +23,9 @@ OpenContext elevates LLM agent context from passive token streams to a navigable
 
 🤖 **OpenCode Integration**
 - Auto-discovers context on session start
-- Smart reminders to commit at milestones
-- Context compaction warnings
+- Continuous Law Enforcer checks (GCC/MCP/research)
+- In-session interruption prompts on workflow violations
+- Context compaction checkpoint enforcement
 - Session handoff support
 
 📊 **Rich TUI Dashboard**
@@ -98,7 +99,7 @@ opencontext setup-opencode --global
 
 ### Setup OpenCode Plugin
 
-The OpenCode plugin provides smart reminders to commit your progress. It must be installed in your OpenCode plugins directory.
+The OpenCode plugin provides continuous Law Enforcer checks for GCC/MCP/research workflow. It must be installed in your OpenCode plugins directory.
 
 #### Option 1: Project-level (Recommended)
 
@@ -139,6 +140,9 @@ ls -la .opencode/plugins/opencontext-reminder.js
 
 # Check plugin (global)
 ls -la ~/.config/opencode/plugins/opencontext-reminder.js
+
+# Check law policy (after opencontext init + opencontext law init)
+ls -la .GCC/law-enforcer.yaml
 ```
 
 ### Plugin Development and Debugging
@@ -149,6 +153,9 @@ ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 
 # Run deterministic research-reminder unit test
 node ./scripts/test-opencode-plugin-research.mjs
+
+# Run deterministic law-enforcer interruption test
+node ./scripts/test-opencode-plugin-law.mjs
 
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
@@ -188,7 +195,15 @@ This creates a `.GCC/` directory with:
 opencode
 ```
 
-The plugin automatically loads and will remind you to commit at milestones.
+The plugin automatically loads and will continuously enforce GCC discipline.
+
+### 2.5 Initialize Law Policy
+
+```bash
+opencontext law init
+opencontext law validate
+opencontext law status
+```
 
 ### 3. Daily Workflow
 
@@ -204,8 +219,10 @@ Creates `.GCC/` directory with:
 
 The OpenCode plugin will:
 - ✅ Auto-load context on session start
-- 💡 Remind you to commit after milestones
-- ⚠️ Warn when context is compacted
+- ⚖️ Enforce checkpointing after significant tool activity
+- ⚠️ Enforce post-compaction checkpoint + recovery
+- 🔎 Enforce research-source capture into GCC
+- 🧰 Remind/enforce MCP usage when relevant
 - 📊 Show context usage statistics
 
 ### 3. Commit Progress
@@ -469,19 +486,20 @@ performance_trends:
 
 ## OpenCode Plugin Features
 
-The plugin provides **constant, contextual reminders**:
+The plugin provides a **continuous Law Enforcer** (interrupt + continue):
 
-### 1. Context Compaction Warning (Critical)
-When OpenCode compacts context (losing details):
+### 1. Context Compaction Enforcement (Critical)
+When OpenCode compacts context:
 ```
-⚠️ Context compacted! Important details may be lost.
-💡 Run: opencontext commit '<what was achieved>'
+⚠️ Context compacted. Checkpoint required.
+💡 opencontext commit '<summary>'
+💡 opencontext context --log --lines 80
 ```
 
-### 2. Milestone Reminders (Every 5 actions)
+### 2. Milestone Checkpoint Enforcement
 ```
-🎯 5 actions completed. Suggestion:
-opencontext commit "Updated authentication module"
+⚖️ Checkpoint debt detected after significant tool activity.
+Law Enforcer injects continuation prompt requiring checkpoint.
 ```
 
 ### 3. Context Usage Stats
@@ -505,18 +523,14 @@ Approaches: 2 (1 abandoned)
 
 ### 5. Idle Session Reminder
 ```
-⏸️ Session idle with 12 unlogged actions.
-💡 Run: opencontext commit '<final summary>'
+⏸️ Session idle with unresolved law debt.
+Law Enforcer re-injects required corrective actions.
 ```
 
-### Smart Commit Suggestions
-
-The plugin analyzes your actions and suggests relevant commit messages:
-
-- **File edits:** `"Updated filename.py"`
-- **Multiple files:** `"Implemented multiple file changes"`
-- **Research:** `"Researched and gathered information"`
-- **Code analysis:** `"Analyzed codebase structure"`
+### Research + MCP Discipline
+- Detects docs/GitHub/arXiv research and requires capture via `opencontext commit`
+- Detects likely MCP-relevant phases and reminds/enforces MCP usage
+- Requires context lookup before retrying after failure signals
 
 ## How the Plugin Works
 
@@ -530,14 +544,14 @@ The OpenCode plugin hooks into OpenCode's event system:
 
 2. **Context Compacted** (`session.compacted`)
    - Triggered when OpenCode truncates context
-   - Shows warning notification
-   - Adds reminder to context
+   - Marks compaction checkpoint debt
+   - Enforces checkpoint + recovery sequence
 
 3. **Tool Execution** (`tool.execute.after`)
    - Tracks every tool execution
-   - Counts toward milestone (every 5 tools)
-   - Generates smart commit suggestions
-   - Special handling for file edits
+   - Detects law violations in real time
+   - Injects corrective continuation prompt when needed
+   - Tracks research/failure/MCP workflow debts
 
 4. **Message Updated** (`message.updated`)
    - Monitors context usage

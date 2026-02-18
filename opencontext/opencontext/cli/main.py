@@ -2,9 +2,10 @@
 """OpenContext CLI - Main entry point."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import click
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -36,6 +37,7 @@ def cli(ctx, version):
       delete     Delete a branch
       feedback   Add user feedback
       benchmark  Record benchmark results
+      law        Manage Law Enforcer policy file
       tui        Launch TUI dashboard
     """
     if version:
@@ -303,6 +305,137 @@ def plugin_path():
         raise click.Abort()
 
 
+def _default_law_path() -> Path:
+    return Path.cwd() / ".GCC" / "law-enforcer.yaml"
+
+
+def _validate_law_content(law: Dict) -> List[str]:
+    """Return validation errors for law config."""
+    errors = []
+    if not isinstance(law, dict):
+        return ["Top-level law config must be a mapping/object."]
+
+    required_sections = ["mode", "gcc", "mcp", "research", "critic"]
+    for section in required_sections:
+        if section not in law:
+            errors.append(f"Missing required top-level section: {section}")
+
+    gcc = law.get("gcc", {})
+    if isinstance(gcc, dict):
+        if "requireCheckpointEveryTools" in gcc:
+            value = gcc.get("requireCheckpointEveryTools")
+            if not isinstance(value, (int, float)) or value < 1:
+                errors.append("gcc.requireCheckpointEveryTools must be a positive number.")
+    else:
+        errors.append("gcc must be a mapping/object.")
+
+    critic = law.get("critic", {})
+    if isinstance(critic, dict):
+        if "enabled" in critic and not isinstance(critic.get("enabled"), bool):
+            errors.append("critic.enabled must be true or false.")
+    else:
+        errors.append("critic must be a mapping/object.")
+
+    return errors
+
+
+@cli.group()
+def law():
+    """Manage OpenContext Law Enforcer policy."""
+    pass
+
+
+@law.command("init")
+@click.option("--force", is_flag=True, help="Overwrite existing law file")
+def law_init(force: bool):
+    """Create .GCC/law-enforcer.yaml from the packaged template."""
+    import opencontext
+    import shutil
+
+    gcc_dir = Path.cwd() / ".GCC"
+    if not gcc_dir.exists():
+        console.print("[red]Error: GCC not initialized. Run 'opencontext init' first.[/red]")
+        raise click.Abort()
+
+    template_source = Path(opencontext.__file__).parent / "plugin" / "law-enforcer.yaml"
+    if not template_source.exists():
+        console.print("[red]Error: Law template not found in package.[/red]")
+        raise click.Abort()
+
+    law_path = _default_law_path()
+    if law_path.exists() and not force:
+        console.print(f"[yellow]Law file already exists:[/yellow] {law_path}")
+        console.print("Use --force to overwrite.")
+        return
+
+    shutil.copy2(template_source, law_path)
+    console.print(f"[green]✓ Law file initialized:[/green] {law_path}")
+    console.print("Validate with: opencontext law validate")
+
+
+@law.command("validate")
+@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law YAML file")
+def law_validate(law_path_opt: Optional[Path]):
+    """Validate law policy file syntax and core schema."""
+    law_path = law_path_opt or _default_law_path()
+    if not law_path.exists():
+        console.print(f"[red]Error: Law file not found:[/red] {law_path}")
+        raise click.Abort()
+
+    try:
+        with open(law_path, "r", encoding="utf-8") as f:
+            law_data = yaml.safe_load(f) or {}
+    except Exception as e:
+        console.print(f"[red]Error parsing YAML:[/red] {e}")
+        raise click.Abort()
+
+    errors = _validate_law_content(law_data)
+    if errors:
+        console.print("[red]Law validation failed:[/red]")
+        for err in errors:
+            console.print(f"  - {err}")
+        raise click.Abort()
+
+    console.print(f"[green]✓ Law file is valid:[/green] {law_path}")
+
+
+@law.command("status")
+@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law YAML file")
+def law_status(law_path_opt: Optional[Path]):
+    """Show Law Enforcer policy status."""
+    law_path = law_path_opt or _default_law_path()
+    exists = law_path.exists()
+
+    if not exists:
+        console.print(Panel(
+            Text(f"Law file missing: {law_path}\nRun: opencontext law init", style="yellow"),
+            title="Law Enforcer Status",
+            border_style="yellow"
+        ))
+        return
+
+    try:
+        with open(law_path, "r", encoding="utf-8") as f:
+            law_data = yaml.safe_load(f) or {}
+    except Exception as e:
+        console.print(f"[red]Error parsing law file:[/red] {e}")
+        raise click.Abort()
+
+    mode = law_data.get("mode", "unknown")
+    checkpoint = law_data.get("gcc", {}).get("requireCheckpointEveryTools", "unknown")
+    critic_enabled = law_data.get("critic", {}).get("enabled", "unknown")
+    critic_model = law_data.get("critic", {}).get("model", "unknown")
+
+    status_text = (
+        f"Path: {law_path}\n"
+        f"Mode: {mode}\n"
+        f"Checkpoint cadence: {checkpoint}\n"
+        f"Critic enabled: {critic_enabled}\n"
+        f"Critic model: {critic_model}"
+    )
+    console.print(Panel(Text(status_text), title="Law Enforcer Status", border_style="blue"))
+
+
 @cli.command('setup-opencode')
 @click.option('--global', 'global_install', is_flag=True, help='Install globally for all projects')
 def setup_opencode(global_install: bool):
@@ -316,6 +449,7 @@ def setup_opencode(global_install: bool):
     # Get plugin and skill source paths
     package_dir = Path(opencontext.__file__).parent
     plugin_source = package_dir / "plugin" / "opencontext-reminder.js"
+    law_source = package_dir / "plugin" / "law-enforcer.yaml"
     skill_source = package_dir.parent / "docs" / "SKILL.md"
     
     if not plugin_source.exists():
@@ -348,12 +482,30 @@ def setup_opencode(global_install: bool):
             plugin_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(plugin_source, plugin_dir / "opencontext-reminder.js")
             console.print(f"[green]✓ Plugin installed in project: {plugin_dir}[/green]")
+
+            # Skill (project-level)
+            skill_dir = opencode_dir / "skills" / "opencontext"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            if skill_source.exists():
+                shutil.copy2(skill_source, skill_dir / "SKILL.md")
+                console.print(f"[green]✓ Skill installed in project: {skill_dir}[/green]")
+
+            # Law template in .GCC if project is initialized
+            gcc_dir = Path.cwd() / ".GCC"
+            law_target = gcc_dir / "law-enforcer.yaml"
+            if gcc_dir.exists() and law_source.exists() and not law_target.exists():
+                shutil.copy2(law_source, law_target)
+                console.print(f"[green]✓ Law file initialized: {law_target}[/green]")
+            elif gcc_dir.exists() and law_target.exists():
+                console.print(f"[blue]ℹ Law file already exists: {law_target}[/blue]")
+            elif not gcc_dir.exists():
+                console.print("[yellow]ℹ GCC not initialized yet. After 'opencontext init', run 'opencontext law init'.[/yellow]")
             
             console.print("\n[yellow]Note:[/yellow] For global installation (all projects), run:")
             console.print("  opencontext setup-opencode --global")
         
         console.print("\n[blue]OpenCode integration ready![/blue]")
-        console.print("The plugin will automatically remind you to commit at milestones.")
+        console.print("The plugin now enforces GCC/MCP/research workflow continuously.")
         
     except Exception as e:
         console.print(f"[red]Error setting up OpenCode integration: {e}[/red]")
