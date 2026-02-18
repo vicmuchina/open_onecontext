@@ -24,3 +24,10 @@ critic:
   model: openai/gpt-oss-120b-TEE
   apiKeyEnv: OPENCONTEXT_LAW_API_KEY
   timeoutMs: 3500
+watchman:
+  enabled: true
+  inspectAssistantTurns: true
+  inspectToolCalls: true
+  inspectCompaction: true
+  includeRecentMessages: 12
+  includeRecentToolCalls: 12

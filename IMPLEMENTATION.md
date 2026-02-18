@@ -1,40 +1,45 @@
 # OpenContext Law Enforcer Implementation
 
 ## Goal
-Implement a continuous Law Enforcer/Criticizer in the OpenContext OpenCode plugin so agents are corrected while working, not only reminded once at session start.
+Implement a true watchman/inspection workflow in the OpenCode plugin so model behavior is inspected continuously and corrected in-session by an AI critic, not only by static prompt reminders.
 
 ## Problem
-Prompt injection alone is frequently ignored during long coding runs. Agents drift away from:
-- GCC/OpenContext checkpointing discipline
-- MCP awareness and usage
-- Capturing research findings into persistent context
-- Retrieving previous failed attempts before retrying
+One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
+- GCC/OpenContext checkpoint discipline
+- Retrieval of failed attempts before retries
+- MCP discovery and usage when relevant
+- Capturing docs/GitHub research into persistent context
 
-## Solution Overview
-The plugin remains `opencontext-reminder.js` for compatibility, but behavior is upgraded from reminders to enforcement:
+## v2 Solution Overview (Active Watchman)
+The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement is upgraded to active inspection:
 
-1. Load user laws from `.GCC/law-enforcer.yaml`
-2. Track per-session state (tool counts, pending debts, cooldowns)
-3. Detect violations continuously during:
-   - `session.created`
-   - `message.updated`
-   - `tool.execute.after`
-   - `session.compacted`
-   - `session.idle`
-4. Interrupt with asynchronous continuation prompts in-session
-5. Keep anti-loop safety (cooldowns, max consecutive injections)
-6. Keep deterministic fallback if criticizer model is unavailable
+1. Load law policy from `.GCC/law-enforcer.yaml`
+2. Track session state with recent messages + recent tool activity
+3. Continuously inspect behavior during:
+   - `session.created` (initial obligations and context)
+   - `tool.execute.after` (live workflow drift)
+   - `message.updated` assistant completion events
+   - `session.idle` (safety pass)
+   - `session.compacted` (mandatory recovery path)
+4. Pull full session transcript via OpenCode session APIs for inspector context
+5. Run AI watchman model on each assistant turn (when enabled) to decide violation/no-violation and generate corrective prompt text
+6. Inject corrective continuation in the same session via `client.session.promptAsync`
+7. Apply anti-loop controls (cooldowns, same-rule cooldown, max consecutive injections, in-flight guards)
+8. Fall back to deterministic rule checks if watchman model is unavailable
 
-## v1 Enforcement Scope
-- GCC init enforcement
-- Checkpoint enforcement every N tool calls
-- Post-compaction checkpoint enforcement
-- Failed-attempt lookup enforcement (`opencontext context --search` / `--log`)
-- Research capture enforcement (docs/github/arxiv signal)
-- MCP awareness + usage nudges when task/tool pattern indicates relevance
+## Enforcement Contract
+- The watchman can interrupt after an assistant response if policy was violated.
+- Correction prompt text is AI-generated when critic is available.
+- Inspector payload includes:
+  - Current law config
+  - Latest assistant message text
+  - Recent transcript window
+  - Recent tool calls and outcomes
+  - Session debt flags (checkpoint/failure lookup/research capture)
+- Deterministic checks still run for hard requirements (e.g. GCC init, compaction checkpoint).
 
 ## Law File
-Primary law file is project-local:
+Primary file:
 - `.GCC/law-enforcer.yaml`
 
 CLI support:
@@ -42,36 +47,40 @@ CLI support:
 - `opencontext law validate`
 - `opencontext law status`
 
-## Criticizer Model
-Default critic configuration:
+## Critic/Watchman Model
+Default:
+- Provider style: OpenAI-compatible
+- Endpoint: `https://llm.chutes.ai/v1`
 - Model: `openai/gpt-oss-120b-TEE`
-- Endpoint: OpenAI-compatible (`https://llm.chutes.ai/v1`)
-- API key source: env var (`OPENCONTEXT_LAW_API_KEY`)
+- API key env: `OPENCONTEXT_LAW_API_KEY`
 
-If unavailable, plugin continues with deterministic rule checks.
+Behavior:
+- If available: watchman evaluates every assistant turn and returns structured violation JSON plus corrective prompt.
+- If unavailable: deterministic rules continue enforcement.
 
 ## Installation Contract
-One-command install continues to install:
+One-command install still installs:
 - OpenContext CLI
 - OpenCode plugin
 - OpenContext skill
 
-Additionally:
-- install law template into local template directory
-- create `.GCC/law-enforcer.yaml` automatically in local project install if `.GCC` exists
+Also:
+- Installs policy template files
+- Initializes `.GCC/law-enforcer.yaml` for local project installs when `.GCC` exists
 
 ## Test Contract
 Must pass:
-- Existing plugin integration scripts
-- Existing research reminder deterministic test
-- New deterministic law enforcer test for interruption injection
+- plugin integration scripts
+- deterministic research reminder test
+- deterministic interruption test
+- new assistant-turn watchman interruption test
 
-## Non-Goals (v1)
-- Hard-blocking session completion
-- Multi-file policy inheritance
-- Centralized cloud policy sync
+## Non-Goals (Current)
+- Hard stop/block on session completion
+- Distributed cloud policy sync
+- Multi-agent arbitration beyond current session
 
 ## Compatibility
-- Keep plugin filename unchanged: `opencontext-reminder.js`
-- Keep existing log signatures used by current test scripts
-- Preserve graceful behavior when GCC is not initialized
+- Plugin filename remains `opencontext-reminder.js`
+- Existing log markers remain compatible for current tests
+- Graceful behavior remains when `.GCC` is not initialized

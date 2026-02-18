@@ -315,7 +315,7 @@ def _validate_law_content(law: Dict) -> List[str]:
     if not isinstance(law, dict):
         return ["Top-level law config must be a mapping/object."]
 
-    required_sections = ["mode", "gcc", "mcp", "research", "critic"]
+    required_sections = ["mode", "gcc", "mcp", "research", "critic", "watchman"]
     for section in required_sections:
         if section not in law:
             errors.append(f"Missing required top-level section: {section}")
@@ -335,6 +335,13 @@ def _validate_law_content(law: Dict) -> List[str]:
             errors.append("critic.enabled must be true or false.")
     else:
         errors.append("critic must be a mapping/object.")
+
+    watchman = law.get("watchman", {})
+    if isinstance(watchman, dict):
+        if "enabled" in watchman and not isinstance(watchman.get("enabled"), bool):
+            errors.append("watchman.enabled must be true or false.")
+    else:
+        errors.append("watchman must be a mapping/object.")
 
     return errors
 
@@ -425,13 +432,17 @@ def law_status(law_path_opt: Optional[Path]):
     checkpoint = law_data.get("gcc", {}).get("requireCheckpointEveryTools", "unknown")
     critic_enabled = law_data.get("critic", {}).get("enabled", "unknown")
     critic_model = law_data.get("critic", {}).get("model", "unknown")
+    watchman_enabled = law_data.get("watchman", {}).get("enabled", "unknown")
+    watchman_turns = law_data.get("watchman", {}).get("inspectAssistantTurns", "unknown")
 
     status_text = (
         f"Path: {law_path}\n"
         f"Mode: {mode}\n"
         f"Checkpoint cadence: {checkpoint}\n"
         f"Critic enabled: {critic_enabled}\n"
-        f"Critic model: {critic_model}"
+        f"Critic model: {critic_model}\n"
+        f"Watchman enabled: {watchman_enabled}\n"
+        f"Watch assistant turns: {watchman_turns}"
     )
     console.print(Panel(Text(status_text), title="Law Enforcer Status", border_style="blue"))
 

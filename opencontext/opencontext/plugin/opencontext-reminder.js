@@ -18,6 +18,8 @@ const CONFIG = {
   contextCacheMs: 15000,
   lawCacheMs: 5000,
   maxRecentTools: 12,
+  maxRecentToolExecutions: 24,
+  maxSnippetChars: 1200,
 };
 
 const DEFAULT_LAW = {
@@ -52,6 +54,14 @@ const DEFAULT_LAW = {
     model: "openai/gpt-oss-120b-TEE",
     apiKeyEnv: "OPENCONTEXT_LAW_API_KEY",
     timeoutMs: 3500,
+  },
+  watchman: {
+    enabled: true,
+    inspectAssistantTurns: true,
+    inspectToolCalls: true,
+    inspectCompaction: true,
+    includeRecentMessages: 12,
+    includeRecentToolCalls: 12,
   },
 };
 
@@ -89,9 +99,14 @@ function getSessionState(sessionId) {
       pendingFailureLookup: false,
       mcpUsed: false,
       recentTools: [],
+      recentToolExecutions: [],
       lastAgent: undefined,
       lastModel: undefined,
       hasViolationDebt: false,
+      inspectorInFlight: false,
+      lastInspectedAssistantMessageId: "",
+      lastAssistantMessageId: "",
+      lastAssistantText: "",
     });
   }
   return sessionStateById.get(resolvedSessionId);
@@ -102,6 +117,60 @@ function appendRecentTool(state, tool) {
   if (state.recentTools.length > CONFIG.maxRecentTools) {
     state.recentTools.shift();
   }
+}
+
+function clipText(value, max = CONFIG.maxSnippetChars) {
+  const text = String(value ?? "");
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...`;
+}
+
+function safeJsonString(value) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return String(value ?? "");
+  }
+}
+
+function appendRecentToolExecution(state, payload) {
+  state.recentToolExecutions.push(payload);
+  if (state.recentToolExecutions.length > CONFIG.maxRecentToolExecutions) {
+    state.recentToolExecutions.shift();
+  }
+}
+
+function extractMessageText(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .filter((part) => part && part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+}
+
+function summarizeMessage(message) {
+  const info = message?.info || {};
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  const text = extractMessageText(parts);
+  return {
+    id: info.id || "",
+    role: info.role || "unknown",
+    agent: info.agent || "",
+    modelID: info.modelID || info?.model?.modelID || "",
+    finish: info.finish || "",
+    text: clipText(text),
+    partTypes: parts.map((part) => part?.type || "unknown").slice(0, 20),
+    time: info.time || {},
+  };
+}
+
+function hasAssistantCompletion(info) {
+  if (!info || info.role !== "assistant") return false;
+  if (info.finish) return true;
+  const completed = info?.time?.completed;
+  return Boolean(completed);
 }
 
 function isGCCInitialized(directory) {
@@ -249,6 +318,18 @@ function sanitizeLaw(law) {
   sanitized.critic.timeoutMs = Math.max(
     500,
     Math.min(10000, Number(sanitized.critic.timeoutMs || 3500))
+  );
+  sanitized.watchman.enabled = sanitized.watchman.enabled !== false;
+  sanitized.watchman.inspectAssistantTurns = sanitized.watchman.inspectAssistantTurns !== false;
+  sanitized.watchman.inspectToolCalls = sanitized.watchman.inspectToolCalls !== false;
+  sanitized.watchman.inspectCompaction = sanitized.watchman.inspectCompaction !== false;
+  sanitized.watchman.includeRecentMessages = Math.max(
+    2,
+    Math.min(50, Number(sanitized.watchman.includeRecentMessages || 12))
+  );
+  sanitized.watchman.includeRecentToolCalls = Math.max(
+    2,
+    Math.min(50, Number(sanitized.watchman.includeRecentToolCalls || 12))
   );
   if (!Array.isArray(sanitized.research.docsKeywords)) {
     sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
@@ -469,6 +550,52 @@ async function getCachedGCCContext(directory, client) {
   return data;
 }
 
+async function getSessionMessages(client, sessionId) {
+  if (!sessionId || !client?.session?.messages) return [];
+  try {
+    const result = await client.session.messages({
+      path: { id: sessionId },
+    });
+    return Array.isArray(result?.data) ? result.data : [];
+  } catch (error) {
+    await log(client, "debug", "law.session_messages_failed", {
+      sessionId,
+      error: error?.message ?? String(error),
+    });
+    return [];
+  }
+}
+
+async function collectWatchmanEvidence(client, law, state) {
+  const sessionId = state?.sessionId || activeSessionId;
+  const messages = await getSessionMessages(client, sessionId);
+  const recent = messages.slice(-law.watchman.includeRecentMessages);
+  const summarized = recent.map(summarizeMessage);
+  const assistants = summarized.filter((msg) => msg.role === "assistant");
+  const latestAssistant = assistants.length > 0 ? assistants[assistants.length - 1] : null;
+  if (latestAssistant) {
+    state.lastAssistantMessageId = latestAssistant.id || state.lastAssistantMessageId;
+    state.lastAssistantText = latestAssistant.text || state.lastAssistantText;
+    if (!state.lastAgent && latestAssistant.agent) state.lastAgent = latestAssistant.agent;
+  }
+
+  const recentToolCalls = state.recentToolExecutions.slice(-law.watchman.includeRecentToolCalls);
+  return {
+    sessionId,
+    recentMessages: summarized,
+    latestAssistant,
+    recentToolCalls,
+    debts: {
+      pendingCompactionCheckpoint: state.pendingCompactionCheckpoint,
+      pendingResearchCapture: state.pendingResearchCapture,
+      pendingFailureLookup: state.pendingFailureLookup,
+      sinceCommitCount: state.sinceCommitCount,
+      toolExecutionCount: state.toolExecutionCount,
+      mcpUsed: state.mcpUsed,
+    },
+  };
+}
+
 function buildViolationPrompt({ rule, detail, commands }) {
   const commandBlock = commands.length > 0
     ? commands.map((cmd) => `- ${cmd}`).join("\n")
@@ -597,6 +724,82 @@ async function runCriticCheck(client, law, payload) {
   }
 }
 
+async function runWatchmanCheck(client, law, payload) {
+  if (!law.watchman.enabled) {
+    return { available: false, violation: false, source: "watchman_disabled" };
+  }
+  if (!law.critic.enabled) {
+    return { available: false, violation: false, source: "critic_disabled" };
+  }
+
+  const envName = law.critic.apiKeyEnv || "OPENCONTEXT_LAW_API_KEY";
+  const apiKey = process.env[envName];
+  if (!apiKey) {
+    return { available: false, violation: false, source: "no_api_key" };
+  }
+
+  const timeoutMs = law.critic.timeoutMs || 3500;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${law.critic.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: law.critic.model,
+        temperature: 0,
+        max_tokens: 320,
+        messages: [
+          {
+            role: "system",
+            content:
+              'You are the OpenContext Law Enforcer Watchman. Evaluate whether the latest assistant behavior violated workflow laws. Return STRICT JSON ONLY: {"violation":true|false,"rule":"<id>","reason":"<short>","correction_prompt":"<required when violation=true>","confidence":0-1}. If no violation, set correction_prompt to "".',
+          },
+          {
+            role: "user",
+            content: JSON.stringify(payload),
+          },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      return { available: false, violation: false, source: "http_error" };
+    }
+
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+    const match = String(text).match(/\{[\s\S]*\}/);
+    if (!match) {
+      return { available: false, violation: false, source: "parse_missing_json" };
+    }
+
+    const parsed = JSON.parse(match[0]);
+    const violation = parsed?.violation === true;
+    const rule = clipText(parsed?.rule || "watchman_policy_violation", 120);
+    const reason = clipText(parsed?.reason || "Policy violation detected by watchman model.", 400);
+    const correctionPrompt = clipText(parsed?.correction_prompt || "", 2500);
+    const confidence = Number(parsed?.confidence ?? 0);
+    return {
+      available: true,
+      violation,
+      source: "watchman_model",
+      rule,
+      reason,
+      correctionPrompt,
+      confidence: Number.isFinite(confidence) ? confidence : 0,
+    };
+  } catch {
+    return { available: false, violation: false, source: "watchman_error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function maybeInterrupt(client, directory, law, state, violation) {
   const now = Date.now();
   const minGap = law.cooldowns.interruptionSeconds * 1000;
@@ -624,7 +827,7 @@ async function maybeInterrupt(client, directory, law, state, violation) {
   }
   if (!enforce) return false;
 
-  const prompt = buildViolationPrompt(violation);
+  const prompt = violation.promptText || buildViolationPrompt(violation);
   const injected = await injectContinuation(client, directory, state, prompt);
   if (injected) {
     state.lastInjectionAt = now;
@@ -635,6 +838,7 @@ async function maybeInterrupt(client, directory, law, state, violation) {
       sessionId: state.sessionId,
       rule: violation.rule,
       detail: violation.detail,
+      source: violation.source || "deterministic",
     });
   }
   await toast(client, {
@@ -729,6 +933,125 @@ function buildViolations({ directory, law, state, tool, commandText, toolOutput,
   return violations;
 }
 
+async function evaluateAndEnforce({
+  client,
+  directory,
+  law,
+  state,
+  trigger,
+  tool,
+  commandText,
+  toolOutput,
+  hasGCC,
+  assistantMessageId,
+}) {
+  let violationDetected = false;
+  const violations = buildViolations({
+    directory,
+    law,
+    state,
+    tool: tool || "unknown",
+    commandText: commandText || "",
+    toolOutput: toolOutput || "",
+    hasGCC,
+  });
+
+  if (violations.length > 0) {
+    violationDetected = true;
+    await log(client, "warn", "law.violation.detected", {
+      sessionId: state.sessionId,
+      rule: violations[0].rule,
+      trigger,
+    });
+    const injected = await maybeInterrupt(client, directory, law, state, violations[0]);
+    if (injected) return true;
+  }
+
+  const shouldRunWatchman =
+    law.watchman.enabled &&
+    ((trigger === "assistant_turn" && law.watchman.inspectAssistantTurns) ||
+      (trigger === "tool_call" && law.watchman.inspectToolCalls) ||
+      (trigger === "compaction" && law.watchman.inspectCompaction) ||
+      trigger === "idle");
+
+  if (!shouldRunWatchman || state.inspectorInFlight) {
+    if (!violationDetected) {
+      state.consecutiveInjections = 0;
+    }
+    return false;
+  }
+
+  state.inspectorInFlight = true;
+  try {
+    const evidence = await collectWatchmanEvidence(client, law, state);
+    const latestAssistant = evidence.latestAssistant;
+    if (!latestAssistant) return false;
+
+    if (assistantMessageId && latestAssistant.id && assistantMessageId !== latestAssistant.id) {
+      return false;
+    }
+    if (
+      trigger !== "tool_call" &&
+      latestAssistant.id &&
+      latestAssistant.id === state.lastInspectedAssistantMessageId
+    ) {
+      return false;
+    }
+
+    const verdict = await runWatchmanCheck(client, law, {
+      trigger,
+      law,
+      latestAssistant,
+      recentMessages: evidence.recentMessages,
+      recentToolCalls: evidence.recentToolCalls,
+      debts: evidence.debts,
+    });
+
+    await log(client, "info", "law.watchman.verdict", {
+      trigger,
+      sessionId: state.sessionId,
+      available: verdict.available,
+      violation: verdict.violation,
+      source: verdict.source,
+      rule: verdict.rule || "",
+      confidence: verdict.confidence ?? 0,
+    });
+
+    if (!verdict.available || !verdict.violation) {
+      if (latestAssistant.id) {
+        state.lastInspectedAssistantMessageId = latestAssistant.id;
+      }
+      if (!violationDetected) {
+        state.consecutiveInjections = 0;
+      }
+      return false;
+    }
+
+    const fallbackPrompt = buildViolationPrompt({
+      rule: verdict.rule || "watchman_policy_violation",
+      detail: verdict.reason || "Law Enforcer requested a workflow correction.",
+      commands: ["Comply with OpenContext law requirements before continuing."],
+    });
+    const correctionPrompt = verdict.correctionPrompt || fallbackPrompt;
+
+    const injected = await maybeInterrupt(client, directory, law, state, {
+      rule: verdict.rule || "watchman_policy_violation",
+      detail: verdict.reason || "Law Enforcer detected a policy violation.",
+      commands: [],
+      useCritic: false,
+      promptText: correctionPrompt,
+      source: "watchman_model",
+    });
+
+    if (latestAssistant.id) {
+      state.lastInspectedAssistantMessageId = latestAssistant.id;
+    }
+    return injected;
+  } finally {
+    state.inspectorInFlight = false;
+  }
+}
+
 export const OpenContextPlugin = async ({ client, directory }) => {
   await log(client, "info", "plugin initialized", { directory });
 
@@ -804,6 +1127,20 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           type: "warning",
           timeout: 10000,
         });
+
+        if (state) {
+          await evaluateAndEnforce({
+            client,
+            directory,
+            law,
+            state,
+            trigger: "compaction",
+            tool: "session.compacted",
+            commandText: "",
+            toolOutput: "",
+            hasGCC: isGCCInitialized(directory),
+          });
+        }
       }
 
       if (event.type === "message.updated") {
@@ -812,52 +1149,74 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         const infoState = getSessionState(infoSessionId || activeSessionId);
         if (infoState) {
           if (typeof info.agent === "string") infoState.lastAgent = info.agent;
-          if (info.model && typeof info.model === "object") infoState.lastModel = info.model;
+          if (info.model && typeof info.model === "object") {
+            infoState.lastModel = info.model;
+          } else if (info.providerID && info.modelID) {
+            infoState.lastModel = {
+              providerID: info.providerID,
+              modelID: info.modelID,
+            };
+          }
         }
 
-        if (!isGCCInitialized(directory)) return;
-        messageUpdateCount += 1;
-        const contextPercent = Math.min(100, Math.round((messageUpdateCount / 50) * 100));
-        if (
-          contextPercent >= CONFIG.contextWarningThreshold &&
-          contextPercent % 10 === 0 &&
-          contextPercent !== lastContextWarningPercent
-        ) {
-          lastContextWarningPercent = contextPercent;
-          await log(client, "info", "high context usage", {
-            contextPercent,
-            messageUpdateCount,
-          });
-          await toast(client, {
-            message: `📊 Context usage: ${contextPercent}%\nConsider: opencontext commit "<summary>"`,
-            type: "info",
-            timeout: 8000,
+        if (isGCCInitialized(directory)) {
+          messageUpdateCount += 1;
+          const contextPercent = Math.min(100, Math.round((messageUpdateCount / 50) * 100));
+          if (
+            contextPercent >= CONFIG.contextWarningThreshold &&
+            contextPercent % 10 === 0 &&
+            contextPercent !== lastContextWarningPercent
+          ) {
+            lastContextWarningPercent = contextPercent;
+            await log(client, "info", "high context usage", {
+              contextPercent,
+              messageUpdateCount,
+            });
+            await toast(client, {
+              message: `📊 Context usage: ${contextPercent}%\nConsider: opencontext commit "<summary>"`,
+              type: "info",
+              timeout: 8000,
+            });
+          }
+        }
+
+        if (infoState && hasAssistantCompletion(info)) {
+          await evaluateAndEnforce({
+            client,
+            directory,
+            law,
+            state: infoState,
+            trigger: "assistant_turn",
+            tool: "assistant.message",
+            commandText: "",
+            toolOutput: "",
+            hasGCC: isGCCInitialized(directory),
+            assistantMessageId: info.id || "",
           });
         }
       }
 
       if (event.type === "session.idle" && state) {
         await log(client, "debug", "event session.idle", { toolExecutionCount: state.toolExecutionCount });
-        if (!isGCCInitialized(directory) || state.toolExecutionCount <= 2) return;
-
-        const violations = buildViolations({
+        const hasGCC = isGCCInitialized(directory);
+        const interrupted = await evaluateAndEnforce({
+          client,
           directory,
           law,
           state,
+          trigger: "idle",
           tool: "idle",
           commandText: "",
           toolOutput: "",
-          hasGCC: isGCCInitialized(directory),
+          hasGCC,
         });
-        if (violations.length > 0) {
-          await maybeInterrupt(client, directory, law, state, violations[0]);
-        } else {
+
+        if (!interrupted && hasGCC && state.toolExecutionCount > 2) {
           await toast(client, {
             message: `⏸️ Session idle after ${state.toolExecutionCount} actions.\nConsider: opencontext commit "Session checkpoint"`,
             type: "info",
             timeout: 8000,
           });
-          state.consecutiveInjections = 0;
         }
       }
     },
@@ -933,6 +1292,13 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       if (!activeSessionId && sessionId) activeSessionId = sessionId;
 
       appendRecentTool(state, tool);
+      appendRecentToolExecution(state, {
+        time: new Date().toISOString(),
+        tool,
+        commandText: clipText(commandText),
+        args: clipText(safeJsonString(args)),
+        output: clipText(safeJsonString(toolOutput)),
+      });
       state.toolExecutionCount += 1;
       if (shouldIncrementCheckpointDebt(tool, commandText)) {
         state.sinceCommitCount += 1;
@@ -990,23 +1356,19 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         state.hasViolationDebt = true;
       }
 
-      const violations = buildViolations({
+      const interrupted = await evaluateAndEnforce({
+        client,
         directory,
         law,
         state,
+        trigger: "tool_call",
         tool,
         commandText,
         toolOutput,
         hasGCC,
       });
 
-      if (violations.length > 0) {
-        await log(client, "warn", "law.violation.detected", {
-          sessionId: state.sessionId,
-          rule: violations[0].rule,
-        });
-        await maybeInterrupt(client, directory, law, state, violations[0]);
-      } else if (state.toolExecutionCount % law.gcc.requireCheckpointEveryTools === 0) {
+      if (!interrupted && state.toolExecutionCount % law.gcc.requireCheckpointEveryTools === 0) {
         if (hasGCC) {
           await toast(client, {
             message: `🎯 ${state.toolExecutionCount} actions completed.\nCheckpoint now:\nopencontext commit "Checkpoint progress"`,

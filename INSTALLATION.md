@@ -114,6 +114,7 @@ The plugin will automatically:
 - Detect `.GCC/` directory
 - Show "GCC Context Loaded" notification
 - Enforce checkpoint and context-recovery workflow continuously
+- Inspect assistant turns with watchman model when configured
 
 ### 3.5 Initialize Law Policy
 
@@ -121,6 +122,12 @@ The plugin will automatically:
 opencontext law init
 opencontext law validate
 opencontext law status
+```
+
+Configure watchman API key for model-based law inspection:
+
+```bash
+export OPENCONTEXT_LAW_API_KEY="<your_api_key>"
 ```
 
 ## Setup Commands

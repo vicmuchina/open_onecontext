@@ -16,9 +16,11 @@ OpenContext is an implementation of the Git Context Controller (GCC) paper for O
 
 1. **Plugin Layer** (OpenCode Integration)
    - Location: `.opencode/plugins/opencontext-reminder.js`
-   - Provides gentle, contextual reminders to commit
+   - Provides active Law Enforcer/watchman inspection
    - Auto-discovers existing GCC context on session start
    - Injects context awareness into agent's system prompt
+   - Inspects assistant output and tool activity continuously
+   - Injects corrective continuation prompts when workflow laws are violated
 
 2. **CLI Tool** (Core GCC Implementation)
    - Command: `opencontext` (alias: `ocx`)
@@ -351,102 +353,39 @@ opencontext tui [--theme dark|light]
 `.opencode/plugins/opencontext-reminder.js` (project-level)
 `~/.config/opencode/plugins/opencontext-reminder.js` (global)
 
-### Reminder Triggers (Combination of B and C)
+### Active Law Enforcer Runtime
 
-#### 1. Context Compaction Reminder (Critical)
-```javascript
-"session.compacted": async (input, output) => {
-  await client.app.toast({
-    message: "⚠️ Context compacted! Important details may be lost.\n💡 Run: opencontext commit '<what was achieved>'",
-    type: "warning",
-    timeout: 10000
-  });
-}
-```
+The plugin is a continuous watchman. It inspects the active session and can interrupt the worker model if workflow laws are violated.
 
-#### 2. Tool Execution Milestones (Every 5 tools)
-```javascript
-let toolCount = 0;
-"tool.execute.after": async (input, output) => {
-  toolCount++;
-  if (toolCount % 5 === 0) {
-    const suggestion = await generateCommitSuggestion(input, output);
-    await client.app.toast({
-      message: `🎯 ${toolCount} actions completed. Suggestion:\nopencontext commit "${suggestion}"`,
-      type: "info"
-    });
-  }
-}
-```
+#### Enforcement Trigger Points
+- `session.created`: startup context and policy priming
+- `experimental.chat.system.transform`: inject policy contract and active GCC state
+- `tool.execute.after`: track action debts and detect immediate workflow violations
+- `message.updated` (assistant completion): inspect each full assistant response
+- `session.idle`: run a safety inspection pass
+- `session.compacted`: enforce checkpoint + recovery path
 
-#### 3. Context Usage Stats
-```javascript
-"message.updated": async (input) => {
-  const contextStats = await getContextStats();
-  if (contextStats.usagePercent > 80) {
-    await client.app.toast({
-      message: `📊 Context: ${contextStats.usagePercent}% full\n💡 Consider: opencontext commit '<summary>'`,
-      type: "info"
-    });
-  }
-}
-```
+#### AI Watchman Evaluation
+On assistant completion, the plugin collects:
+- latest assistant output
+- recent transcript window from session APIs
+- recent tool calls and outputs
+- policy/debt state (checkpoint overdue, failure lookup pending, research capture pending)
 
-#### 4. Session Start Auto-Discovery
-```javascript
-"session.created": async () => {
-  if (fs.existsSync(".GCC/")) {
-    const context = await exec("opencontext context");
-    const branch = await exec("opencontext status --branch-only");
-    
-    // Prepend to system context
-    return {
-      context: `## GCC Project Context
-Active Branch: ${branch}
-${context}
+That evidence is sent to the configured critic/watchman model, which must return structured JSON:
+- `violation` (true/false)
+- `rule`
+- `reason`
+- `correction_prompt` (AI-generated correction text)
 
-💡 Available commands: opencontext commit, branch, merge, context
-📊 Run 'opencontext tui' for visual dashboard
-`
-    };
-  }
-}
-```
+When `violation` is true, the plugin injects `correction_prompt` via `client.session.promptAsync` in the same session, interrupting and redirecting workflow.
 
-#### 5. Idle Session Suggestion
-```javascript
-"session.idle": async () => {
-  const unloggedTurns = await countUnloggedTurns();
-  if (unloggedTurns > 10) {
-    await client.app.toast({
-      message: `⏸️ Session idle with ${unloggedTurns} unlogged actions.\n💡 Run: opencontext commit '<final summary>'`,
-      type: "info"
-    });
-  }
-}
-```
-
-### Smart Commit Suggestions
-
-The plugin analyzes recent actions to suggest commit messages:
-
-```javascript
-async function generateCommitSuggestion(input, output) {
-  const recentTools = getRecentTools(5);
-  const filesModified = getModifiedFiles();
-  
-  if (recentTools.includes("edit") && filesModified.length > 0) {
-    return `Updated ${filesModified.join(", ")}`;
-  }
-  if (recentTools.includes("bash") && recentTools.includes("test")) {
-    return "Implemented and tested feature";
-  }
-  if (recentTools.filter(t => t === "webfetch").length > 0) {
-    return "Researched and gathered information";
-  }
-  return "Checkpoint progress";
-}
-```
+#### Safety Controls
+- global cooldown between injections
+- per-rule cooldown
+- max consecutive injections per session
+- in-flight protection
+- deterministic fallback when model checks are unavailable
 
 ---
 
@@ -623,17 +562,20 @@ opencontext context --log
 ```yaml
 defaults:
   auto_git_commit: true
-  reminder_frequency: 5  # Every N tool executions
-  context_warning_threshold: 80  # Percentage
+  context_warning_threshold: 80
   tui:
     theme: dark
     refresh_rate: 1s
 
-reminders:
-  on_compaction: true
-  on_tool_milestones: true
-  on_context_usage: true
-  on_session_idle: true
+law_enforcer:
+  mode: interrupt_continue
+  watchman:
+    run_on_assistant_turn: true
+    include_recent_messages: 12
+    include_recent_tools: 20
+  cooldowns:
+    interruption_seconds: 45
+    same_rule_seconds: 120
 ```
 
 ### Project Config

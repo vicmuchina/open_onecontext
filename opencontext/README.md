@@ -24,7 +24,8 @@ OpenContext elevates LLM agent context from passive token streams to a navigable
 🤖 **OpenCode Integration**
 - Auto-discovers context on session start
 - Continuous Law Enforcer checks (GCC/MCP/research)
-- In-session interruption prompts on workflow violations
+- Per-assistant-turn watchman inspection using session transcript + tool traces
+- In-session interruption prompts on workflow violations (AI-generated correction prompt)
 - Context compaction checkpoint enforcement
 - Session handoff support
 
@@ -157,6 +158,9 @@ node ./scripts/test-opencode-plugin-research.mjs
 # Run deterministic law-enforcer interruption test
 node ./scripts/test-opencode-plugin-law.mjs
 
+# Run assistant-turn watchman interruption test (model mocked)
+node ./scripts/test-opencode-plugin-watchman.mjs
+
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
 
@@ -203,6 +207,12 @@ The plugin automatically loads and will continuously enforce GCC discipline.
 opencontext law init
 opencontext law validate
 opencontext law status
+```
+
+Set watchman API key (for critic/watchman model calls):
+
+```bash
+export OPENCONTEXT_LAW_API_KEY="<your_chutes_or_openai_compatible_api_key>"
 ```
 
 ### 3. Daily Workflow
