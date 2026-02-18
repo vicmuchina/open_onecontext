@@ -51,6 +51,7 @@ opencontext law validate
   - endpointPath: /chat/completions
   - model: provider model id
   - apiKeyEnv: env var name holding API key
+  - strictJsonRetryAttempts: retries malformed model output in stricter JSON-only mode (recommended: 1)
   - authHeader/apiKeyPrefix/headers: optional custom auth
 
 - Export API key:

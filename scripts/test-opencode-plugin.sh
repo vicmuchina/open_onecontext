@@ -13,6 +13,9 @@ HAD_GCC=0
 
 cleanup() {
   if [[ "${HAD_GCC}" -eq 1 && -d "${GCC_BACKUP}" ]]; then
+    if [[ -d "${GCC_DIR}" ]]; then
+      rm -rf "${GCC_DIR}"
+    fi
     mv "${GCC_BACKUP}" "${GCC_DIR}"
   fi
 }

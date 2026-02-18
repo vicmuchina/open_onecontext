@@ -45,6 +45,7 @@ writeFileSync(
       apiKeyEnv: "CHUTES_API_KEY",
       timeoutMs: 3000,
       maxTokensWatchman: 200,
+      strictJsonRetryAttempts: 1,
     },
     watchman: {
       enabled: true,
@@ -110,8 +111,10 @@ const client = {
 const oldFetch = global.fetch;
 const oldApiKey = process.env.CHUTES_API_KEY;
 process.env.CHUTES_API_KEY = "test-key";
-
-global.fetch = async () => ({
+let fetchCalls = 0;
+global.fetch = async () => {
+  fetchCalls += 1;
+  return ({
   ok: true,
   json: async () => ({
     choices: [
@@ -122,7 +125,8 @@ global.fetch = async () => ({
       },
     ],
   }),
-});
+  });
+};
 
 try {
   const pluginModule = await import(pathToFileURL(pluginFile).href);
@@ -166,6 +170,10 @@ try {
   const verdictBlob = JSON.stringify(verdictLog);
   if (!verdictBlob.includes("parse_invalid_")) {
     console.error("FAIL  malformed output did not surface parse_invalid_* source");
+    process.exit(1);
+  }
+  if (fetchCalls !== 2) {
+    console.error(`FAIL  expected strict retry fetch count=2, got ${fetchCalls}`);
     process.exit(1);
   }
 

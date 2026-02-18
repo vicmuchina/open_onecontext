@@ -34,6 +34,7 @@ critic:
   timeoutMs: 8000
   maxTokensCritic: 120
   maxTokensWatchman: 320
+  strictJsonRetryAttempts: 1
 watchman:
   enabled: true
   inspectAssistantTurns: true

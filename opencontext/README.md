@@ -249,7 +249,8 @@ Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but yo
     "request": {},
     "model": "<provider_model_id>",
     "apiKeyEnv": "CHUTES_API_KEY",
-    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID"
+    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
+    "strictJsonRetryAttempts": 1
   }
 }
 ```
@@ -257,7 +258,8 @@ Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but yo
 Notes:
 - `apiKeyEnv` is the env var name used at runtime.
 - If your provider does not use `Authorization: Bearer`, change `authHeader` and `apiKeyPrefix`.
-- The plugin always sends `response_format: { type: "json_schema", ... }` and only accepts valid structured JSON responses for enforcement.
+- The plugin always sends `response_format: { type: "json_schema", ... }`.
+- If provider output is malformed, it retries in stricter JSON-only mode (`critic.strictJsonRetryAttempts`) before skipping enforcement.
 
 Watchman request/response traces are persisted to:
 
@@ -607,7 +609,7 @@ The OpenCode plugin hooks into OpenCode's event system:
 - Provider API: OpenAI-compatible `POST /chat/completions`
 - Request includes `response_format.type = json_schema`
 - Required output fields: `violation`, `rule`, `reason`, `correction_prompt`, `confidence`
-- Malformed/free-text responses are logged as parse errors and are never used for interruption prompts
+- Malformed/free-text responses trigger strict retry first, then are logged as parse errors if still invalid
 
 ## Evolution Tracking
 
@@ -696,7 +698,8 @@ metadata:
     "request": {},
     "model": "openai/gpt-oss-120b-TEE",
     "apiKeyEnv": "CHUTES_API_KEY",
-    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID"
+    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
+    "strictJsonRetryAttempts": 1
   },
   "watchman": {
     "enabled": true,

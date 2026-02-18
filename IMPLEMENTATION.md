@@ -26,7 +26,7 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
 6. Inject corrective continuation in the same session via `client.session.promptAsync`
 7. Apply anti-loop controls (cooldowns, same-rule cooldown, max consecutive injections, in-flight guards)
 8. Fall back to deterministic rule checks if watchman model is unavailable
-9. Require structured JSON-schema responses from watchman/critic (OpenAI-compatible `response_format`), with malformed responses ignored (no free-text fallback interruption)
+9. Require structured JSON-schema responses from watchman/critic (OpenAI-compatible `response_format`), with strict retry on malformed outputs and no free-text fallback interruption
 
 ## Enforcement Contract
 - The watchman can interrupt after an assistant response if policy was violated.
@@ -69,7 +69,7 @@ Default:
 Behavior:
 - If available: watchman evaluates every assistant turn and returns structured violation JSON plus corrective prompt.
 - If unavailable: deterministic rules continue enforcement.
-- If response is malformed/non-JSON: logged as parse error and ignored for interruption.
+- If response is malformed/non-JSON: retried in strict JSON-only mode, then logged as parse error and ignored for interruption if still invalid.
 
 ## Installation Contract
 One-command install still installs:

@@ -44,7 +44,8 @@
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
     "timeoutMs": 8000,
     "maxTokensCritic": 120,
-    "maxTokensWatchman": 320
+    "maxTokensWatchman": 320,
+    "strictJsonRetryAttempts": 1
   },
   "watchman": {
     "enabled": true,

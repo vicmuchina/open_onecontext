@@ -388,7 +388,7 @@ Required watchman fields:
 - `correction_prompt` (AI-generated correction text)
 - `confidence`
 
-If model output is malformed/non-JSON, enforcement is skipped for that verdict and logged as parse failure.
+If model output is malformed/non-JSON, plugin retries in strict JSON-only mode (configurable) before skipping enforcement and logging parse failure.
 When `violation` is true with valid schema output, the plugin injects `correction_prompt` via `client.session.promptAsync` in the same session, interrupting and redirecting workflow.
 
 #### Provider Configuration

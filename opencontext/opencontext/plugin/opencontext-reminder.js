@@ -66,6 +66,7 @@ const DEFAULT_LAW = {
     timeoutMs: 8000,
     maxTokensCritic: 120,
     maxTokensWatchman: 320,
+    strictJsonRetryAttempts: 1,
   },
   watchman: {
     enabled: true,
@@ -393,6 +394,10 @@ function sanitizeLaw(law) {
   sanitized.critic.maxTokensWatchman = Math.max(
     64,
     Math.min(4000, Number(sanitized.critic.maxTokensWatchman || 320))
+  );
+  sanitized.critic.strictJsonRetryAttempts = Math.max(
+    0,
+    Math.min(5, Math.round(Number(sanitized.critic.strictJsonRetryAttempts ?? 1)))
   );
   if (!sanitized.critic.apiKeyEnv || typeof sanitized.critic.apiKeyEnv !== "string") {
     sanitized.critic.apiKeyEnv = "CHUTES_API_KEY";
@@ -1042,6 +1047,117 @@ function buildLawModelRequest({ law, model, messages, maxTokens, schemaName, sch
   return body;
 }
 
+function withStrictRetrySystemMessage(messages, schemaName) {
+  const list = Array.isArray(messages) ? messages : [];
+  if (list.length === 0) return list;
+  const [first, ...rest] = list;
+  const firstText = typeof first?.content === "string" ? first.content : safeJsonString(first?.content);
+  const strictSuffix =
+    `\n\nSTRICT RETRY: previous output was invalid. Return ONLY valid JSON for schema '${schemaName}'. ` +
+    "No prose. No markdown. No extra keys.";
+  return [
+    {
+      ...(first || {}),
+      content: `${firstText}${strictSuffix}`,
+    },
+    ...rest,
+  ];
+}
+
+function isValidCriticParsed(parsed) {
+  return parsed && typeof parsed === "object" && typeof parsed.enforce === "boolean";
+}
+
+function isValidWatchmanParsed(parsed) {
+  return (
+    parsed &&
+    typeof parsed === "object" &&
+    typeof parsed.violation === "boolean" &&
+    typeof parsed.rule === "string" &&
+    typeof parsed.reason === "string" &&
+    typeof parsed.correction_prompt === "string"
+  );
+}
+
+async function requestStructuredVerdict({
+  law,
+  apiKey,
+  model,
+  timeoutMs,
+  schemaName,
+  schema,
+  maxTokens,
+  messages,
+  isValidParsed,
+}) {
+  const retries = Math.max(0, Number(law?.critic?.strictJsonRetryAttempts || 0));
+  let lastFailure = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const attemptMessages = attempt === 0
+      ? messages
+      : withStrictRetrySystemMessage(messages, schemaName);
+    const result = await callLawModel({
+      law,
+      apiKey,
+      model,
+      timeoutMs,
+      body: buildLawModelRequest({
+        law,
+        model,
+        messages: attemptMessages,
+        maxTokens,
+        schemaName,
+        schema,
+      }),
+    });
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        source: "http_error",
+        status: result.status,
+        raw: result.raw,
+        attempts: attempt + 1,
+      };
+    }
+
+    if (!result.parsed) {
+      lastFailure = {
+        ok: false,
+        source: "parse_invalid_json",
+        raw: result.raw,
+        attempts: attempt + 1,
+      };
+      continue;
+    }
+
+    if (!isValidParsed(result.parsed)) {
+      lastFailure = {
+        ok: false,
+        source: "parse_invalid_shape",
+        raw: clipText(safeJsonString(result.parsed), 500),
+        attempts: attempt + 1,
+      };
+      continue;
+    }
+
+    return {
+      ok: true,
+      parsed: result.parsed,
+      raw: result.raw,
+      attempts: attempt + 1,
+    };
+  }
+
+  return lastFailure || {
+    ok: false,
+    source: "parse_invalid_json",
+    raw: "",
+    attempts: retries + 1,
+  };
+}
+
 async function callLawModel({ law, apiKey, model, timeoutMs, body }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1080,58 +1196,45 @@ async function runCriticCheck(client, law, payload) {
   const model = resolveCriticModel(law);
 
   try {
-    const result = await callLawModel({
+    const result = await requestStructuredVerdict({
       law,
       apiKey,
       model,
       timeoutMs: law.critic.timeoutMs || 3500,
-      body: buildLawModelRequest({
-        law,
-        model,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an OpenContext law gate. Respond in strict JSON schema only.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify(payload),
-          },
-        ],
-        maxTokens: law.critic.maxTokensCritic || 120,
-        schemaName: "opencontext_critic",
-        schema: CRITIC_RESPONSE_SCHEMA,
-      }),
+      schemaName: "opencontext_critic",
+      schema: CRITIC_RESPONSE_SCHEMA,
+      maxTokens: law.critic.maxTokensCritic || 120,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an OpenContext law gate. Respond in strict JSON schema only.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(payload),
+        },
+      ],
+      isValidParsed: isValidCriticParsed,
     });
     if (!result.ok) {
       return {
         enforce: true,
-        source: "http_error",
+        source: result.source || "http_error",
         status: result.status,
         raw: result.raw,
         apiKeyEnv: sourceEnv,
+        attempts: result.attempts || 1,
       };
     }
     const parsed = result.parsed;
-    if (!parsed) {
-      return {
-        enforce: true,
-        source: "parse_invalid_json",
-        raw: result.raw,
-        apiKeyEnv: sourceEnv,
-      };
-    }
-    if (typeof parsed.enforce !== "boolean") {
-      return {
-        enforce: true,
-        source: "parse_invalid_shape",
-        raw: clipText(safeJsonString(parsed), 500),
-        apiKeyEnv: sourceEnv,
-      };
-    }
     const enforce = parsed?.enforce !== false;
-    return { enforce, source: "critic", reason: parsed?.reason || "" };
+    return {
+      enforce,
+      source: "critic",
+      reason: parsed?.reason || "",
+      attempts: result.attempts || 1,
+    };
   } catch (error) {
     return {
       enforce: true,
@@ -1157,62 +1260,40 @@ async function runWatchmanCheck(client, law, payload) {
   const model = resolveCriticModel(law);
 
   try {
-    const result = await callLawModel({
+    const result = await requestStructuredVerdict({
       law,
       apiKey,
       model,
       timeoutMs: law.critic.timeoutMs || 8000,
-      body: buildLawModelRequest({
-        law,
-        model,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are the OpenContext Law Enforcer Watchman. Judge only workflow-law compliance and respond in strict JSON schema.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify(payload),
-          },
-        ],
-        maxTokens: law.critic.maxTokensWatchman || 320,
-        schemaName: "opencontext_watchman",
-        schema: WATCHMAN_RESPONSE_SCHEMA,
-      }),
+      schemaName: "opencontext_watchman",
+      schema: WATCHMAN_RESPONSE_SCHEMA,
+      maxTokens: law.critic.maxTokensWatchman || 320,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are the OpenContext Law Enforcer Watchman. Judge only workflow-law compliance and respond in strict JSON schema.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(payload),
+        },
+      ],
+      isValidParsed: isValidWatchmanParsed,
     });
     if (!result.ok) {
       return {
         available: false,
         violation: false,
-        source: "http_error",
+        source: result.source || "http_error",
         status: result.status,
         error: result.raw,
         apiKeyEnv: sourceEnv,
         model,
+        attempts: result.attempts || 1,
       };
     }
     const parsed = result.parsed;
-    if (!parsed) {
-      return {
-        available: false,
-        violation: false,
-        source: "parse_invalid_json",
-        apiKeyEnv: sourceEnv,
-        model,
-        raw: result.raw,
-      };
-    }
-    if (typeof parsed.violation !== "boolean") {
-      return {
-        available: false,
-        violation: false,
-        source: "parse_invalid_shape",
-        apiKeyEnv: sourceEnv,
-        model,
-        raw: clipText(safeJsonString(parsed), 500),
-      };
-    }
     const violation = parsed?.violation === true;
     const rule = clipText(parsed?.rule || "watchman_policy_violation", 120);
     const reason = clipText(parsed?.reason || "Policy violation detected by watchman model.", 400);
@@ -1228,6 +1309,7 @@ async function runWatchmanCheck(client, law, payload) {
       confidence: Number.isFinite(confidence) ? confidence : 0,
       model,
       apiKeyEnv: sourceEnv,
+      attempts: result.attempts || 1,
     };
   } catch (error) {
     return {
@@ -1264,6 +1346,7 @@ async function maybeInterrupt(client, directory, law, state, violation) {
       enforce,
       source: verdict.source,
       reason: verdict.reason || "",
+      attempts: verdict.attempts || 1,
     });
   }
   if (!enforce) return false;
@@ -1503,6 +1586,7 @@ async function evaluateAndEnforce({
       status: verdict.status || 0,
       error: verdict.error || "",
       raw: verdict.raw || "",
+      attempts: verdict.attempts || 1,
     });
 
     if (!verdict.available || !verdict.violation) {

@@ -151,12 +151,14 @@ You can also edit `.GCC/law-enforcer.json` for any OpenAI-compatible provider:
     "headers": {},
     "request": {},
     "model": "<provider_model_id>",
-    "apiKeyEnv": "CHUTES_API_KEY"
+    "apiKeyEnv": "CHUTES_API_KEY",
+    "strictJsonRetryAttempts": 1
   }
 }
 ```
 
-The plugin sends `response_format.type=json_schema` and only enforces model output when structured JSON is valid.
+The plugin sends `response_format.type=json_schema`.
+If output is malformed, it retries in stricter JSON-only mode, then skips enforcement if still invalid.
 
 Watchman trace logs are written to:
 

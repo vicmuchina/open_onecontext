@@ -366,6 +366,10 @@ def _validate_law_content(law: Dict) -> List[str]:
             errors.append("critic.headers must be an object/mapping.")
         if "request" in critic and not isinstance(critic.get("request"), dict):
             errors.append("critic.request must be an object/mapping.")
+        if "strictJsonRetryAttempts" in critic:
+            value = critic.get("strictJsonRetryAttempts")
+            if not isinstance(value, (int, float)) or value < 0:
+                errors.append("critic.strictJsonRetryAttempts must be a non-negative number.")
     else:
         errors.append("critic must be a mapping/object.")
 
