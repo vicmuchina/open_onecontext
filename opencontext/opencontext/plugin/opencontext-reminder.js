@@ -49,11 +49,12 @@ const DEFAULT_LAW = {
   },
   critic: {
     enabled: true,
-    provider: "openai_compatible",
+    provider: "chutes",
     baseUrl: "https://llm.chutes.ai/v1",
     model: "openai/gpt-oss-120b-TEE",
-    apiKeyEnv: "OPENCONTEXT_LAW_API_KEY",
-    timeoutMs: 3500,
+    apiKeyEnv: "CHUTES_API_KEY",
+    modelEnv: "OPENCONTEXT_LAW_MODEL_ID",
+    timeoutMs: 8000,
   },
   watchman: {
     enabled: true,
@@ -317,8 +318,14 @@ function sanitizeLaw(law) {
   );
   sanitized.critic.timeoutMs = Math.max(
     500,
-    Math.min(10000, Number(sanitized.critic.timeoutMs || 3500))
+    Math.min(20000, Number(sanitized.critic.timeoutMs || 8000))
   );
+  if (!sanitized.critic.apiKeyEnv || typeof sanitized.critic.apiKeyEnv !== "string") {
+    sanitized.critic.apiKeyEnv = "CHUTES_API_KEY";
+  }
+  if (!sanitized.critic.model || typeof sanitized.critic.model !== "string") {
+    sanitized.critic.model = DEFAULT_LAW.critic.model;
+  }
   sanitized.watchman.enabled = sanitized.watchman.enabled !== false;
   sanitized.watchman.inspectAssistantTurns = sanitized.watchman.inspectAssistantTurns !== false;
   sanitized.watchman.inspectToolCalls = sanitized.watchman.inspectToolCalls !== false;
@@ -673,11 +680,100 @@ async function getAvailableMcpNames() {
   }
 }
 
+function resolveCriticApiKey(law) {
+  const orderedEnvNames = [];
+  if (typeof law?.critic?.apiKeyEnv === "string" && law.critic.apiKeyEnv.trim()) {
+    orderedEnvNames.push(law.critic.apiKeyEnv.trim());
+  }
+  orderedEnvNames.push("CHUTES_API_KEY", "OPENCONTEXT_LAW_API_KEY");
+
+  for (const envName of orderedEnvNames) {
+    const value = process.env[envName];
+    if (value && value.trim()) {
+      return { apiKey: value.trim(), sourceEnv: envName };
+    }
+  }
+  return { apiKey: "", sourceEnv: "" };
+}
+
+function resolveCriticModel(law) {
+  const modelEnv = typeof law?.critic?.modelEnv === "string" ? law.critic.modelEnv.trim() : "";
+  if (modelEnv && process.env[modelEnv]?.trim()) {
+    return process.env[modelEnv].trim();
+  }
+  return law?.critic?.model || DEFAULT_LAW.critic.model;
+}
+
+function parseWatchmanTextFallback(text) {
+  const raw = String(text || "").trim();
+  const lowered = toLowerSafe(raw);
+  if (!raw) return null;
+
+  if (
+    lowered.includes("no violation") ||
+    lowered.includes("compliant") ||
+    lowered.includes("follows the policy")
+  ) {
+    return {
+      violation: false,
+      rule: "",
+      reason: clipText(raw, 400),
+      correctionPrompt: "",
+      source: "watchman_text_fallback",
+    };
+  }
+
+  if (
+    lowered.includes("violation") ||
+    lowered.includes("must") ||
+    lowered.includes("should") ||
+    lowered.includes("required")
+  ) {
+    return {
+      violation: true,
+      rule: "watchman_policy_violation",
+      reason: clipText(raw, 400),
+      correctionPrompt: clipText(
+        `OpenContext Law Enforcer correction:\n${raw}\n\nBefore continuing normal work, satisfy the law requirements, then continue implementation.`,
+        2500
+      ),
+      source: "watchman_text_fallback",
+    };
+  }
+
+  return null;
+}
+
+function extractCompletionMessageContent(message) {
+  if (!message || typeof message !== "object") return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part.text === "string") return part.text;
+        return safeJsonString(part);
+      })
+      .join("\n");
+  }
+  if (content && typeof content === "object") {
+    return safeJsonString(content);
+  }
+  if (typeof message.reasoning_content === "string" && message.reasoning_content) {
+    return message.reasoning_content;
+  }
+  if (typeof message.reasoning === "string" && message.reasoning) {
+    return message.reasoning;
+  }
+  return "";
+}
+
 async function runCriticCheck(client, law, payload) {
   if (!law.critic.enabled) return { enforce: true, source: "disabled" };
-  const envName = law.critic.apiKeyEnv || "OPENCONTEXT_LAW_API_KEY";
-  const apiKey = process.env[envName];
+  const { apiKey, sourceEnv } = resolveCriticApiKey(law);
   if (!apiKey) return { enforce: true, source: "no_api_key" };
+  const model = resolveCriticModel(law);
 
   const timeoutMs = law.critic.timeoutMs || 3500;
   const controller = new AbortController();
@@ -691,7 +787,7 @@ async function runCriticCheck(client, law, payload) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        model: law.critic.model,
+        model,
         temperature: 0,
         max_tokens: 120,
         messages: [
@@ -708,17 +804,23 @@ async function runCriticCheck(client, law, payload) {
       }),
     });
     if (!response.ok) {
-      return { enforce: true, source: "http_error" };
+      return { enforce: true, source: "http_error", status: response.status, apiKeyEnv: sourceEnv };
     }
     const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content || "";
+    const message = data?.choices?.[0]?.message || {};
+    const text = extractCompletionMessageContent(message);
     const match = String(text).match(/\{[\s\S]*\}/);
     if (!match) return { enforce: true, source: "parse_missing_json" };
     const parsed = JSON.parse(match[0]);
     const enforce = parsed?.enforce !== false;
     return { enforce, source: "critic", reason: parsed?.reason || "" };
-  } catch {
-    return { enforce: true, source: "critic_error" };
+  } catch (error) {
+    return {
+      enforce: true,
+      source: "critic_error",
+      error: error?.message ?? String(error),
+      apiKeyEnv: sourceEnv,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -732,13 +834,13 @@ async function runWatchmanCheck(client, law, payload) {
     return { available: false, violation: false, source: "critic_disabled" };
   }
 
-  const envName = law.critic.apiKeyEnv || "OPENCONTEXT_LAW_API_KEY";
-  const apiKey = process.env[envName];
+  const { apiKey, sourceEnv } = resolveCriticApiKey(law);
   if (!apiKey) {
     return { available: false, violation: false, source: "no_api_key" };
   }
+  const model = resolveCriticModel(law);
 
-  const timeoutMs = law.critic.timeoutMs || 3500;
+  const timeoutMs = law.critic.timeoutMs || 8000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -751,7 +853,7 @@ async function runWatchmanCheck(client, law, payload) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        model: law.critic.model,
+        model,
         temperature: 0,
         max_tokens: 320,
         messages: [
@@ -768,14 +870,45 @@ async function runWatchmanCheck(client, law, payload) {
       }),
     });
     if (!response.ok) {
-      return { available: false, violation: false, source: "http_error" };
+      const raw = await response.text().catch(() => "");
+      return {
+        available: false,
+        violation: false,
+        source: "http_error",
+        status: response.status,
+        error: clipText(raw, 500),
+        apiKeyEnv: sourceEnv,
+        model,
+      };
     }
 
     const data = await response.json();
     const text = data?.choices?.[0]?.message?.content || "";
     const match = String(text).match(/\{[\s\S]*\}/);
     if (!match) {
-      return { available: false, violation: false, source: "parse_missing_json" };
+      const fallback = parseWatchmanTextFallback(text);
+      if (fallback) {
+        return {
+          available: true,
+          violation: fallback.violation,
+          source: fallback.source,
+          rule: fallback.rule,
+          reason: fallback.reason,
+          correctionPrompt: fallback.correctionPrompt,
+          confidence: 0.4,
+          model,
+          apiKeyEnv: sourceEnv,
+          raw: clipText(text, 500),
+        };
+      }
+      return {
+        available: false,
+        violation: false,
+        source: "parse_missing_json",
+        apiKeyEnv: sourceEnv,
+        model,
+        raw: clipText(text || safeJsonString(message), 500),
+      };
     }
 
     const parsed = JSON.parse(match[0]);
@@ -792,9 +925,18 @@ async function runWatchmanCheck(client, law, payload) {
       reason,
       correctionPrompt,
       confidence: Number.isFinite(confidence) ? confidence : 0,
+      model,
+      apiKeyEnv: sourceEnv,
     };
-  } catch {
-    return { available: false, violation: false, source: "watchman_error" };
+  } catch (error) {
+    return {
+      available: false,
+      violation: false,
+      source: "watchman_error",
+      error: error?.message ?? String(error),
+      apiKeyEnv: sourceEnv,
+      model,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -1015,6 +1157,11 @@ async function evaluateAndEnforce({
       source: verdict.source,
       rule: verdict.rule || "",
       confidence: verdict.confidence ?? 0,
+      model: verdict.model || resolveCriticModel(law),
+      apiKeyEnv: verdict.apiKeyEnv || "",
+      status: verdict.status || 0,
+      error: verdict.error || "",
+      raw: verdict.raw || "",
     });
 
     if (!verdict.available || !verdict.violation) {

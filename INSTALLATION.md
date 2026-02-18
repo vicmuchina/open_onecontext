@@ -127,7 +127,16 @@ opencontext law status
 Configure watchman API key for model-based law inspection:
 
 ```bash
-export OPENCONTEXT_LAW_API_KEY="<your_api_key>"
+export CHUTES_API_KEY="<your_api_key>"
+# Optional model override (default is openai/gpt-oss-120b-TEE)
+export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
+```
+
+You can also edit `.GCC/law-enforcer.yaml` and change:
+
+```yaml
+critic:
+  model: <any_chutes_model_id>
 ```
 
 ## Setup Commands

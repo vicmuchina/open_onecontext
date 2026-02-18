@@ -212,7 +212,16 @@ opencontext law status
 Set watchman API key (for critic/watchman model calls):
 
 ```bash
-export OPENCONTEXT_LAW_API_KEY="<your_chutes_or_openai_compatible_api_key>"
+export CHUTES_API_KEY="<your_chutes_api_key>"
+# Optional: override watchman model without editing law file
+export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
+```
+
+You can also change the model directly in `.GCC/law-enforcer.yaml`:
+
+```yaml
+critic:
+  model: openai/gpt-oss-120b-TEE
 ```
 
 ### 3. Daily Workflow

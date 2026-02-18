@@ -52,7 +52,8 @@ Default:
 - Provider style: OpenAI-compatible
 - Endpoint: `https://llm.chutes.ai/v1`
 - Model: `openai/gpt-oss-120b-TEE`
-- API key env: `OPENCONTEXT_LAW_API_KEY`
+- API key env (default): `CHUTES_API_KEY` (fallback: `OPENCONTEXT_LAW_API_KEY`)
+- Optional model override env: `OPENCONTEXT_LAW_MODEL_ID`
 
 Behavior:
 - If available: watchman evaluates every assistant turn and returns structured violation JSON plus corrective prompt.

@@ -19,11 +19,12 @@ research:
   docsKeywords: [docs, readme, documentation, arxiv.org]
 critic:
   enabled: true
-  provider: openai_compatible
+  provider: chutes
   baseUrl: https://llm.chutes.ai/v1
   model: openai/gpt-oss-120b-TEE
-  apiKeyEnv: OPENCONTEXT_LAW_API_KEY
-  timeoutMs: 3500
+  apiKeyEnv: CHUTES_API_KEY
+  modelEnv: OPENCONTEXT_LAW_MODEL_ID
+  timeoutMs: 8000
 watchman:
   enabled: true
   inspectAssistantTurns: true
