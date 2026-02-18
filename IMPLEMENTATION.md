@@ -3,6 +3,11 @@
 ## Goal
 Implement a true watchman/inspection workflow in the OpenCode plugin so model behavior is inspected continuously and corrected in-session by an AI critic, not only by static prompt reminders.
 
+Companion docs:
+- `PROJECT_BLUEPRINT.md`
+- `HOOKS_AND_ENFORCEMENT.md`
+- `AGENT_WORKFLOW.md`
+
 ## Problem
 One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
 - GCC/OpenContext checkpoint discipline

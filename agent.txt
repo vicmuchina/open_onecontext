@@ -3,6 +3,11 @@ OpenContext + Law Enforcer Auto-Setup (Fallback for agents)
 Goal
 - Install OpenContext CLI, OpenCode plugin, skill, and law config even if install.sh fails.
 
+Read first (project blueprint)
+- PROJECT_BLUEPRINT.md
+- HOOKS_AND_ENFORCEMENT.md
+- AGENT_WORKFLOW.md
+
 Assumptions
 - Linux/macOS shell
 - opencode already installed

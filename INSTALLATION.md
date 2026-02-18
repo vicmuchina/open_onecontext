@@ -32,6 +32,14 @@ If installer automation fails, use the agent fallback playbook:
 cat agent.txt
 ```
 
+Project blueprint docs (repo root):
+
+```bash
+cat PROJECT_BLUEPRINT.md
+cat HOOKS_AND_ENFORCEMENT.md
+cat AGENT_WORKFLOW.md
+```
+
 ## What Gets Installed
 
 The installer will:

@@ -1,0 +1,91 @@
+# Agent Workflow
+
+This is the practical runbook for daily use.
+
+## One-Time Setup
+1. Install:
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+```
+
+2. In project:
+```bash
+opencontext init --project-name "<name>" --goal "<goal>"
+opencontext law init
+opencontext law validate
+```
+
+3. Set provider key env (default):
+```bash
+export CHUTES_API_KEY="<key>"
+```
+
+## Start Work Session
+- Interactive:
+```bash
+opencode
+```
+- Or server mode:
+```bash
+opencode serve --hostname 127.0.0.1 --port 4096 --print-logs --log-level DEBUG
+```
+
+## During Work
+- Follow law-enforcer prompts when interruptions occur.
+- Commit progress regularly:
+```bash
+opencontext commit "<summary>"
+```
+- Before retrying failed work:
+```bash
+opencontext context --search "<feature/failure>"
+opencontext context --log --lines 80
+```
+
+## If Research Was Done (docs/GitHub)
+Capture it immediately:
+```bash
+opencontext commit "Research findings on <topic>"
+```
+
+## If Context Gets Compacted
+Do this sequence:
+```bash
+opencontext commit "Post-compaction checkpoint"
+opencontext context --log --lines 80
+```
+
+## Verify Enforcement Is Running
+- Check trace file:
+```bash
+tail -n 50 .GCC/law-enforcer-trace.jsonl
+```
+- Check law status:
+```bash
+opencontext law status
+```
+
+## Tune Provider or Behavior
+Edit `.GCC/law-enforcer.json`:
+- Provider endpoint/model/auth (`critic.*`)
+- Strict retry count (`critic.strictJsonRetryAttempts`)
+- Planning guards (`gcc.skipCheckpointDuringPlanningAgent`, `watchman.skipDuringPlanningAgent`)
+
+## Recovery If Installer Fails
+Use:
+- `agent.txt`
+
+## Regression Test Set
+Run before pushing major changes:
+```bash
+node scripts/test-opencode-plugin-law.mjs
+node scripts/test-opencode-plugin-research.mjs
+node scripts/test-opencode-plugin-watchman.mjs
+node scripts/test-opencode-plugin-trace.mjs
+node scripts/test-opencode-plugin-watchman-malformed.mjs
+node scripts/test-opencode-plugin-provider-config.mjs
+node scripts/test-opencode-plugin-planning-guard.mjs
+RUN_TIMEOUT_SECONDS=90 ./scripts/test-opencode-plugin.sh
+./scripts/test-opencode-serve-plugin.sh
+CHUTES_API_KEY=<key> ./scripts/test-opencode-watchman-trace-live.sh
+```

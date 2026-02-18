@@ -8,6 +8,11 @@ OpenContext is an implementation of the Git Context Controller (GCC) paper for O
 
 **Key Innovation:** Elevates context from passive token streams to a navigable, versioned memory hierarchy with explicit operations: COMMIT, BRANCH, MERGE, and CONTEXT.
 
+Blueprint docs for fast onboarding:
+- `PROJECT_BLUEPRINT.md`
+- `HOOKS_AND_ENFORCEMENT.md`
+- `AGENT_WORKFLOW.md`
+
 ---
 
 ## Architecture

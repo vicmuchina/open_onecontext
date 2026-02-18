@@ -13,6 +13,11 @@ OpenContext elevates LLM agent context from passive token streams to a navigable
 
 **Key Innovation:** Agents can COMMIT milestones, BRANCH to explore alternatives, MERGE results, and retrieve CONTEXT at varying resolutions - enabling structured reflection and seamless session handoffs.
 
+Repository blueprint docs (root):
+- `../PROJECT_BLUEPRINT.md`
+- `../HOOKS_AND_ENFORCEMENT.md`
+- `../AGENT_WORKFLOW.md`
+
 ## Features
 
 🎯 **Core GCC Operations**
