@@ -1,7 +1,7 @@
-# Project: OpenContext
+# Project: RLM
 
 ## Goal
-Git Context Controller for OpenCode
+Benchmark Chutes API models to test plugin system initialization before proceeding with no-GCC tests
 
 ## Milestones
 - [ ] Initial setup
