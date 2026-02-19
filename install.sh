@@ -176,6 +176,27 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
         else
             echo -e "${BLUE}ℹ️  Policy file already exists: ${PROJECT_GCC_DIR}/law-policy.txt${NC}"
         fi
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-watchman-system.txt" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-watchman-system.txt" \
+               "${PROJECT_GCC_DIR}/law-watchman-system.txt"
+            echo -e "${GREEN}✓ Watchman prompt initialized: ${PROJECT_GCC_DIR}/law-watchman-system.txt${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Watchman prompt already exists: ${PROJECT_GCC_DIR}/law-watchman-system.txt${NC}"
+        fi
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-failure-policy.txt" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-failure-policy.txt" \
+               "${PROJECT_GCC_DIR}/law-failure-policy.txt"
+            echo -e "${GREEN}✓ Failure policy initialized: ${PROJECT_GCC_DIR}/law-failure-policy.txt${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Failure policy already exists: ${PROJECT_GCC_DIR}/law-failure-policy.txt${NC}"
+        fi
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-research-policy.txt" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-research-policy.txt" \
+               "${PROJECT_GCC_DIR}/law-research-policy.txt"
+            echo -e "${GREEN}✓ Research policy initialized: ${PROJECT_GCC_DIR}/law-research-policy.txt${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Research policy already exists: ${PROJECT_GCC_DIR}/law-research-policy.txt${NC}"
+        fi
         if [[ ! -f "${PROJECT_GCC_DIR}/law-runtime.json" ]]; then
             if [[ -f "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" ]]; then
                 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" \
@@ -237,6 +258,12 @@ cp "${INSTALL_DIR}/opencontext/opencontext/plugin/opencontext-reminder.js" \
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.json" \
    "${HOME}/.local/share/opencontext/templates/"
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-policy.txt" \
+   "${HOME}/.local/share/opencontext/templates/"
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-watchman-system.txt" \
+   "${HOME}/.local/share/opencontext/templates/"
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-failure-policy.txt" \
+   "${HOME}/.local/share/opencontext/templates/"
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-research-policy.txt" \
    "${HOME}/.local/share/opencontext/templates/"
 if [[ -f "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" ]]; then
     cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" \
