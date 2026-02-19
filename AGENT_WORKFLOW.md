@@ -11,6 +11,8 @@ curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/ins
 2. In project:
 ```bash
 opencontext init --project-name "<name>" --goal "<goal>"
+# optional: derive goal from existing spec file
+opencontext init --project-name "<name>" --goal-file SPEC.md
 opencontext law init
 opencontext law validate
 opencontext law guide
@@ -19,6 +21,10 @@ opencontext law guide
 3. Set provider key env (default):
 ```bash
 export CHUTES_API_KEY="<key>"
+
+# OR set once in config files (no repeated export):
+# ~/.config/opencontext/law-runtime.json
+# .GCC/law-runtime.json
 ```
 
 ## Start Work Session
@@ -74,6 +80,7 @@ Edit `.GCC/law-enforcer.json`:
 - Custom rules (`custom.rules`) and escalation (`custom.escalation`)
 
 Edit `.GCC/law-policy.txt` for natural-language laws watched continuously by the enforcer model.
+Edit `.GCC/law-runtime.json` for project-local API key/model overrides.
 Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.
 
 ## Recovery If Installer Fails
@@ -91,6 +98,7 @@ node scripts/test-opencode-plugin-watchman-malformed.mjs
 node scripts/test-opencode-plugin-provider-config.mjs
 node scripts/test-opencode-plugin-planning-guard.mjs
 node scripts/test-opencode-plugin-custom-rules.mjs
+node scripts/test-opencode-plugin-runtime-config.mjs
 ./scripts/test-opencontext-law-assets.sh
 RUN_TIMEOUT_SECONDS=90 ./scripts/test-opencode-plugin.sh
 ./scripts/test-opencode-serve-plugin.sh

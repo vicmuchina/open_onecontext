@@ -10,6 +10,7 @@ This module implements the GCC paper's context management system:
 import hashlib
 import os
 import subprocess
+from datetime import timezone
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -52,10 +53,84 @@ class GCC:
         """Generate a short hash for commits."""
         return hashlib.sha1(content.encode()).hexdigest()[:7]
 
+    def _default_goal_text(self) -> str:
+        """Fallback goal text when no goal source is available."""
+        return "Project goal not specified"
+
+    def _goal_candidates(self) -> List[Path]:
+        """Common spec/doc files used to infer project goal."""
+        candidates = [
+            "SPEC.md",
+            "spec.md",
+            "PROJECT_BLUEPRINT.md",
+            "IMPLEMENTATION.md",
+            "README.md",
+            "readme.md",
+        ]
+        return [self.project_root / name for name in candidates]
+
+    def _extract_goal_from_markdown(self, path: Path) -> Optional[str]:
+        """Extract a concise goal statement from a markdown file."""
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return None
+
+        lines = [line.strip() for line in text.splitlines()]
+        lines = [line for line in lines if line]
+        if not lines:
+            return None
+
+        # Prefer explicit Goal section.
+        for i, line in enumerate(lines):
+            if line.lower().startswith("## goal") or line.lower().startswith("# goal"):
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    candidate = lines[j]
+                    if candidate.startswith("#"):
+                        break
+                    if candidate:
+                        return candidate[:300]
+
+        # Otherwise use first heading body line, then first non-heading line.
+        for i, line in enumerate(lines):
+            if line.startswith("#"):
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    candidate = lines[j]
+                    if candidate and not candidate.startswith("#"):
+                        return candidate[:300]
+        for line in lines:
+            if not line.startswith("#"):
+                return line[:300]
+        return None
+
+    def _resolve_goal(
+        self,
+        goal: Optional[str],
+        goal_file: Optional[Path] = None,
+    ) -> str:
+        """Resolve project goal using explicit text, file, or common spec files."""
+        if goal and goal.strip():
+            return goal.strip()
+
+        if goal_file:
+            extracted = self._extract_goal_from_markdown(Path(goal_file))
+            if extracted:
+                return extracted
+
+        for candidate in self._goal_candidates():
+            extracted = self._extract_goal_from_markdown(candidate)
+            if extracted:
+                return extracted
+
+        return self._default_goal_text()
+
     def init(
         self,
         project_name: Optional[str] = None,
         goal: Optional[str] = None,
+        goal_file: Optional[Path] = None,
     ) -> None:
         """Initialize GCC in the current directory.
         
@@ -78,7 +153,7 @@ class GCC:
 
         # Create main.md
         project_name = project_name or self.project_root.name
-        goal = goal or "Project goal not specified"
+        goal = self._resolve_goal(goal=goal, goal_file=goal_file)
         
         main_content = f"""# Project: {project_name}
 
@@ -102,7 +177,7 @@ Add important architectural decisions and constraints here.
         # Create evolution.yaml
         evolution_content = {
             "project_name": project_name,
-            "created_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "approaches_history": [],
             "user_sessions": [],
             "performance_trends": [],

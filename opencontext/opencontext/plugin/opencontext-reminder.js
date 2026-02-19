@@ -17,6 +17,7 @@ const CONFIG = {
   lawFileNameYaml: "law-enforcer.yaml",
   lawPolicyFileName: "law-policy.txt",
   agentGuideFileName: "AGENT_GUIDE.txt",
+  runtimeConfigFileName: "law-runtime.json",
   traceFileName: "law-enforcer-trace.jsonl",
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
@@ -120,6 +121,11 @@ let contextCache = {
 let lawCache = {
   fetchedAt: 0,
   path: "",
+  data: null,
+};
+let runtimeConfigCache = {
+  fetchedAt: 0,
+  directory: "",
   data: null,
 };
 let mcpNamesCache = {
@@ -621,6 +627,102 @@ function getLawPaths(directory) {
   ];
 }
 
+function getRuntimeConfigPaths(directory) {
+  return [
+    join(homedir(), ".config", "opencontext", CONFIG.runtimeConfigFileName),
+    join(directory, CONFIG.gccDir, CONFIG.runtimeConfigFileName),
+  ];
+}
+
+function parseJsonFile(path) {
+  if (!existsSync(path)) return {};
+  try {
+    const raw = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(raw || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function sanitizeRuntimeCritic(runtimeRaw) {
+  const fromRoot = runtimeRaw && typeof runtimeRaw === "object" ? runtimeRaw : {};
+  const critic = fromRoot.critic && typeof fromRoot.critic === "object"
+    ? fromRoot.critic
+    : fromRoot;
+  if (!critic || typeof critic !== "object") return {};
+
+  const allowedKeys = [
+    "apiKey",
+    "model",
+    "baseUrl",
+    "endpointPath",
+    "authHeader",
+    "apiKeyPrefix",
+    "headers",
+    "request",
+    "apiKeyEnv",
+    "modelEnv",
+    "timeoutMs",
+    "maxTokensCritic",
+    "maxTokensWatchman",
+    "strictJsonRetryAttempts",
+  ];
+  const out = {};
+  for (const key of allowedKeys) {
+    const value = critic[key];
+    if (value !== undefined && value !== null) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+async function loadRuntimeCriticConfig(client, directory) {
+  if (
+    runtimeConfigCache.data &&
+    runtimeConfigCache.directory === directory &&
+    Date.now() - runtimeConfigCache.fetchedAt < CONFIG.lawCacheMs
+  ) {
+    return runtimeConfigCache.data;
+  }
+
+  const [globalPath, projectPath] = getRuntimeConfigPaths(directory);
+  const merged = {};
+  const sources = [];
+
+  const globalParsed = sanitizeRuntimeCritic(parseJsonFile(globalPath));
+  if (Object.keys(globalParsed).length > 0) {
+    Object.assign(merged, globalParsed);
+    sources.push("global");
+  }
+
+  const projectParsed = sanitizeRuntimeCritic(parseJsonFile(projectPath));
+  if (Object.keys(projectParsed).length > 0) {
+    Object.assign(merged, projectParsed);
+    sources.push("project");
+  }
+
+  const result = {
+    critic: merged,
+    sources,
+    paths: {
+      global: globalPath,
+      project: projectPath,
+    },
+  };
+  runtimeConfigCache = {
+    fetchedAt: Date.now(),
+    directory,
+    data: result,
+  };
+  await log(client, "debug", "law.runtime_config.loaded", {
+    sources,
+    paths: result.paths,
+  });
+  return result;
+}
+
 function getLawPolicyPath(directory, law) {
   const fileName = String(law?.custom?.policyFile || CONFIG.lawPolicyFileName).trim();
   return join(directory, CONFIG.gccDir, fileName || CONFIG.lawPolicyFileName);
@@ -668,7 +770,17 @@ async function loadLaw(client, directory) {
   } else {
     await log(client, "debug", "law.default_used", { lawPath });
   }
-  const law = sanitizeLaw(parsed);
+  let law = sanitizeLaw(parsed);
+  const runtimeConfig = await loadRuntimeCriticConfig(client, directory);
+  if (runtimeConfig?.critic && Object.keys(runtimeConfig.critic).length > 0) {
+    law = sanitizeLaw(
+      deepMerge(law, {
+        critic: deepMerge(law.critic, runtimeConfig.critic),
+      })
+    );
+    law.critic.runtimeConfigSources = runtimeConfig.sources || [];
+    law.critic.runtimeConfigPaths = runtimeConfig.paths || {};
+  }
   const policyPath = getLawPolicyPath(directory, law);
   law.custom.policyPath = policyPath;
   law.custom.policyText = "";
@@ -1052,6 +1164,10 @@ function buildLawSummaryForInspector(law) {
       inspectOnIdle: law.watchman.inspectOnIdle,
       skipDuringPlanningAgent: law.watchman.skipDuringPlanningAgent,
     },
+    runtime: {
+      criticConfigSources: law?.critic?.runtimeConfigSources || [],
+      criticConfigPaths: law?.critic?.runtimeConfigPaths || {},
+    },
     agentGuide: {
       includeInWatchmanPayload: law.agentGuide.includeInWatchmanPayload,
       path: law.agentGuide.path,
@@ -1308,6 +1424,10 @@ async function getAvailableMcpNames() {
 }
 
 function resolveCriticApiKey(law) {
+  const staticApiKey = String(law?.critic?.apiKey || "").trim();
+  if (staticApiKey) {
+    return { apiKey: staticApiKey, sourceEnv: "runtime_config" };
+  }
   const orderedEnvNames = [];
   if (typeof law?.critic?.apiKeyEnv === "string" && law.critic.apiKeyEnv.trim()) {
     orderedEnvNames.push(law.critic.apiKeyEnv.trim());

@@ -1,0 +1,14 @@
+{
+  "critic": {
+    "apiKey": "",
+    "model": "",
+    "baseUrl": "",
+    "endpointPath": "",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "apiKeyEnv": "",
+    "modelEnv": ""
+  }
+}

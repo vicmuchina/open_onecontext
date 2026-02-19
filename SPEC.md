@@ -49,6 +49,7 @@ Blueprint docs for fast onboarding:
 ├── evolution.yaml              # Project evolution & approach tracking
 ├── law-enforcer.json           # Law Enforcer machine-readable policy
 ├── law-policy.txt              # Editable natural-language law policy
+├── law-runtime.json            # Optional provider key/model overrides
 ├── AGENT_GUIDE.txt             # Generated agent handbook
 ├── law-enforcer-trace.jsonl    # Runtime watchman/violation evidence
 └── branches/
@@ -341,6 +342,12 @@ opencontext law status
 opencontext law guide
 ```
 
+#### `opencontext init --goal-file`
+Initialize GCC using an existing markdown spec as goal source:
+```bash
+opencontext init --project-name "MyApp" --goal-file SPEC.md
+```
+
 ### TUI Dashboard
 
 #### `opencontext tui`
@@ -613,7 +620,17 @@ Primary customization lives in project `.GCC/`:
 
 - `.GCC/law-enforcer.json`: structured settings for deterministic checks, watchman provider, custom rules, and escalation.
 - `.GCC/law-policy.txt`: natural-language laws for watchman judgment.
+- `.GCC/law-runtime.json`: project provider key/model overrides (optional).
 - `.GCC/AGENT_GUIDE.txt`: generated agent handbook for setup/customization commands.
+
+Global override file:
+- `~/.config/opencontext/law-runtime.json`
+
+Provider resolution precedence:
+1. environment variables
+2. `.GCC/law-runtime.json`
+3. `~/.config/opencontext/law-runtime.json`
+4. `.GCC/law-enforcer.json` defaults
 
 Example custom rule:
 

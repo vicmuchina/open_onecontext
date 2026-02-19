@@ -19,6 +19,7 @@ console = Console()
 
 LAW_POLICY_FILENAME = "law-policy.txt"
 AGENT_GUIDE_FILENAME = "AGENT_GUIDE.txt"
+LAW_RUNTIME_FILENAME = "law-runtime.json"
 
 
 @click.group(invoke_without_command=True)
@@ -58,11 +59,12 @@ def cli(ctx, version):
 @cli.command()
 @click.option('--project-name', '-n', help='Name of the project')
 @click.option('--goal', '-g', help='High-level project objective')
-def init(project_name: Optional[str], goal: Optional[str]):
+@click.option('--goal-file', type=click.Path(path_type=Path), help='Path to an existing markdown spec/goal file')
+def init(project_name: Optional[str], goal: Optional[str], goal_file: Optional[Path]):
     """Initialize GCC in current directory."""
     try:
         gcc = GCC()
-        gcc.init(project_name=project_name, goal=goal)
+        gcc.init(project_name=project_name, goal=goal, goal_file=goal_file)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
@@ -74,6 +76,7 @@ def init(project_name: Optional[str], goal: Optional[str]):
         assets = _ensure_law_assets(force=False)
         console.print(f"[green]✓ Law config ready:[/green] {assets.get('law', '')}")
         console.print(f"[green]✓ Policy file ready:[/green] {assets.get('policy', '')}")
+        console.print(f"[green]✓ Runtime config ready:[/green] {assets.get('runtime', '')}")
         console.print(f"[green]✓ Agent guide generated:[/green] {assets.get('guide', '')}")
     except Exception as e:
         console.print(f"[yellow]Warning: failed to generate law helper files automatically: {e}[/yellow]")
@@ -338,6 +341,27 @@ def _agent_guide_path() -> Path:
     return Path.cwd() / ".GCC" / AGENT_GUIDE_FILENAME
 
 
+def _law_runtime_path() -> Path:
+    return Path.cwd() / ".GCC" / LAW_RUNTIME_FILENAME
+
+
+def _default_law_runtime_config() -> Dict:
+    return {
+        "critic": {
+            "apiKey": "",
+            "model": "",
+            "baseUrl": "",
+            "endpointPath": "",
+            "authHeader": "authorization",
+            "apiKeyPrefix": "Bearer",
+            "headers": {},
+            "request": {},
+            "apiKeyEnv": "",
+            "modelEnv": "",
+        }
+    }
+
+
 def _default_law_policy_text() -> str:
     return dedent(
         """\
@@ -365,7 +389,12 @@ def _default_law_policy_text() -> str:
     ).strip() + "\n"
 
 
-def _render_agent_guide_text(law_path: Path, policy_path: Path) -> str:
+def _render_agent_guide_text(
+    law_path: Path,
+    policy_path: Path,
+    runtime_path: Path,
+    global_runtime_path: Path,
+) -> str:
     return dedent(
         f"""\
         OpenContext Agent Guide
@@ -386,6 +415,8 @@ def _render_agent_guide_text(law_path: Path, policy_path: Path) -> str:
         - .GCC/branches/*/(commit.md, log.md, metadata.yaml): branch memory artifacts.
         - {law_path}: machine-readable law config (JSON).
         - {policy_path}: plain-text workflow law document for watchman judgment.
+        - {runtime_path}: optional project-local provider secret/model overrides.
+        - {global_runtime_path}: optional global provider secret/model overrides.
         - .GCC/law-enforcer-trace.jsonl: runtime evidence log for requests/responses/violations.
 
         Runtime Components
@@ -425,6 +456,10 @@ def _render_agent_guide_text(law_path: Path, policy_path: Path) -> str:
         Main Customization Paths (No Plugin Code Changes)
         1) Provider + model config (in {law_path}, section `critic`)
            - baseUrl, endpointPath, authHeader, apiKeyPrefix, headers, request, model, apiKeyEnv, modelEnv.
+        1b) Provider key/model without re-exporting env vars:
+           - set `critic.apiKey` / `critic.model` in {runtime_path} (project),
+             or in {global_runtime_path} (global).
+           - precedence: environment vars > project runtime config > global runtime config > law defaults.
         2) Deterministic behavior config
            - gcc.*, mcp.*, research.*, watchman.*
         3) Custom deterministic rules (section `custom.rules`)
@@ -480,6 +515,7 @@ def _render_agent_guide_text(law_path: Path, policy_path: Path) -> str:
 
         Standard Daily Workflow
         - opencontext init --project-name "<name>" --goal "<goal>"
+        - opencontext init --project-name "<name>" --goal-file SPEC.md
         - opencontext law init
         - opencontext law validate
         - opencontext law status
@@ -538,9 +574,12 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
     results: Dict[str, str] = {}
     law_target = _default_law_path()
     guide_target = _agent_guide_path()
+    runtime_target = _law_runtime_path()
+    global_runtime_target = Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME
 
     law_template = _get_package_template_path("law-enforcer.json")
     policy_template = _get_package_template_path(LAW_POLICY_FILENAME)
+    runtime_template = _get_package_template_path(LAW_RUNTIME_FILENAME)
 
     if force or not law_target.exists():
         shutil.copy2(law_template, law_target)
@@ -565,8 +604,25 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
     else:
         results["policy"] = f"kept:{policy_target}"
 
+    if force or not runtime_target.exists():
+        if runtime_template.exists():
+            shutil.copy2(runtime_template, runtime_target)
+        else:
+            runtime_target.write_text(
+                json.dumps(_default_law_runtime_config(), indent=2) + "\n",
+                encoding="utf-8",
+            )
+        results["runtime"] = f"written:{runtime_target}"
+    else:
+        results["runtime"] = f"kept:{runtime_target}"
+
     guide_target.write_text(
-        _render_agent_guide_text(law_path=law_target, policy_path=policy_target),
+        _render_agent_guide_text(
+            law_path=law_target,
+            policy_path=policy_target,
+            runtime_path=runtime_target,
+            global_runtime_path=global_runtime_target,
+        ),
         encoding="utf-8",
     )
     results["guide"] = f"written:{guide_target}"
@@ -726,14 +782,14 @@ def _validate_law_content(law: Dict) -> List[str]:
 
 @cli.group()
 def law():
-    """Manage OpenContext Law Enforcer policy."""
+    """Manage OpenContext Law Enforcer policy, runtime config, and agent guide files."""
     pass
 
 
 @law.command("init")
 @click.option("--force", is_flag=True, help="Overwrite existing law file")
 def law_init(force: bool):
-    """Create/refresh .GCC law policy + agent guide files."""
+    """Create/refresh .GCC law policy, runtime config, and agent guide files."""
     try:
         assets = _ensure_law_assets(force=force)
     except RuntimeError as e:
@@ -745,6 +801,7 @@ def law_init(force: bool):
 
     console.print(f"[green]✓ Law file:[/green] {assets.get('law', '')}")
     console.print(f"[green]✓ Policy file:[/green] {assets.get('policy', '')}")
+    console.print(f"[green]✓ Runtime config:[/green] {assets.get('runtime', '')}")
     console.print(f"[green]✓ Agent guide:[/green] {assets.get('guide', '')}")
     console.print("Validate with: opencontext law validate")
 
@@ -809,6 +866,8 @@ def law_status(law_path_opt: Optional[Path]):
     custom_mode = law_data.get("custom", {}).get("escalation", {}).get("mode", "unknown")
     custom_rules = len(law_data.get("custom", {}).get("rules", []) or [])
     policy_path = _resolve_policy_path_from_law_data(law_data)
+    runtime_path = _law_runtime_path()
+    global_runtime_path = Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME
     guide_path = law_data.get("agentGuide", {}).get("path", f".GCC/{AGENT_GUIDE_FILENAME}")
 
     status_text = (
@@ -826,6 +885,8 @@ def law_status(law_path_opt: Optional[Path]):
         f"Custom escalation mode: {custom_mode}\n"
         f"Custom rule count: {custom_rules}\n"
         f"Policy file: {policy_path}\n"
+        f"Runtime file (project): {runtime_path}\n"
+        f"Runtime file (global): {global_runtime_path}\n"
         f"Agent guide: {guide_path}"
     )
     console.print(Panel(Text(status_text), title="Law Enforcer Status", border_style="blue"))
@@ -852,9 +913,22 @@ def law_guide():
         policy_path.write_text(_default_law_policy_text(), encoding="utf-8")
         console.print(f"[yellow]Policy file was missing and has been created:[/yellow] {policy_path}")
 
+    runtime_path = _law_runtime_path()
+    if not runtime_path.exists():
+        runtime_path.write_text(
+            json.dumps(_default_law_runtime_config(), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"[yellow]Runtime config was missing and has been created:[/yellow] {runtime_path}")
+
     guide_path = _agent_guide_path()
     guide_path.write_text(
-        _render_agent_guide_text(law_path=law_path, policy_path=policy_path),
+        _render_agent_guide_text(
+            law_path=law_path,
+            policy_path=policy_path,
+            runtime_path=runtime_path,
+            global_runtime_path=Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME,
+        ),
         encoding="utf-8",
     )
     console.print(f"[green]✓ Agent guide generated:[/green] {guide_path}")
@@ -874,6 +948,7 @@ def setup_opencode(global_install: bool):
     package_dir = Path(opencontext.__file__).parent
     plugin_source = package_dir / "plugin" / "opencontext-reminder.js"
     skill_source = package_dir.parent / "docs" / "SKILL.md"
+    runtime_source = package_dir / "plugin" / LAW_RUNTIME_FILENAME
     
     if not plugin_source.exists():
         console.print("[red]Error: Plugin source not found[/red]")
@@ -883,6 +958,7 @@ def setup_opencode(global_install: bool):
         if global_install:
             # Install globally
             opencode_config = Path.home() / ".config" / "opencode"
+            opencontext_config = Path.home() / ".config" / "opencontext"
             
             # Plugin
             plugin_dir = opencode_config / "plugins"
@@ -896,6 +972,20 @@ def setup_opencode(global_install: bool):
             if skill_source.exists():
                 shutil.copy2(skill_source, skill_dir / "SKILL.md")
                 console.print(f"[green]✓ Skill installed globally: {skill_dir}[/green]")
+
+            opencontext_config.mkdir(parents=True, exist_ok=True)
+            runtime_target = opencontext_config / LAW_RUNTIME_FILENAME
+            if not runtime_target.exists():
+                if runtime_source.exists():
+                    shutil.copy2(runtime_source, runtime_target)
+                else:
+                    runtime_target.write_text(
+                        json.dumps(_default_law_runtime_config(), indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                console.print(f"[green]✓ Runtime config initialized: {runtime_target}[/green]")
+            elif runtime_target.exists():
+                console.print(f"[blue]ℹ Runtime config already exists: {runtime_target}[/blue]")
         else:
             # Install in current directory (project-level)
             opencode_dir = Path.cwd() / ".opencode"
@@ -919,6 +1009,7 @@ def setup_opencode(global_install: bool):
                 assets = _ensure_law_assets(force=False)
                 console.print(f"[green]✓ Law file:[/green] {assets.get('law', '')}")
                 console.print(f"[green]✓ Policy file:[/green] {assets.get('policy', '')}")
+                console.print(f"[green]✓ Runtime config:[/green] {assets.get('runtime', '')}")
                 console.print(f"[green]✓ Agent guide:[/green] {assets.get('guide', '')}")
             elif not gcc_dir.exists():
                 console.print("[yellow]ℹ GCC not initialized yet. After 'opencontext init', run 'opencontext law init'.[/yellow]")

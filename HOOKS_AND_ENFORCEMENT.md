@@ -4,6 +4,9 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 
 ## Plugin File
 - `opencontext/opencontext/plugin/opencontext-reminder.js`
+- Optional runtime provider configs:
+  - `~/.config/opencontext/law-runtime.json` (global)
+  - `.GCC/law-runtime.json` (project override)
 
 ## Hook Coverage
 1. `session.created`

@@ -176,6 +176,32 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
         else
             echo -e "${BLUE}ℹ️  Policy file already exists: ${PROJECT_GCC_DIR}/law-policy.txt${NC}"
         fi
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-runtime.json" ]]; then
+            if [[ -f "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" ]]; then
+                cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" \
+                   "${PROJECT_GCC_DIR}/law-runtime.json"
+            else
+                cat > "${PROJECT_GCC_DIR}/law-runtime.json" <<'JSON'
+{
+  "critic": {
+    "apiKey": "",
+    "model": "",
+    "baseUrl": "",
+    "endpointPath": "",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "apiKeyEnv": "",
+    "modelEnv": ""
+  }
+}
+JSON
+            fi
+            echo -e "${GREEN}✓ Runtime config initialized: ${PROJECT_GCC_DIR}/law-runtime.json${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Runtime config already exists: ${PROJECT_GCC_DIR}/law-runtime.json${NC}"
+        fi
         if command -v opencontext &> /dev/null; then
             (
                 cd "${PROJECT_DIR}"
@@ -212,10 +238,45 @@ cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.json" \
    "${HOME}/.local/share/opencontext/templates/"
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-policy.txt" \
    "${HOME}/.local/share/opencontext/templates/"
+if [[ -f "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" ]]; then
+    cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" \
+       "${HOME}/.local/share/opencontext/templates/"
+else
+    cat > "${HOME}/.local/share/opencontext/templates/law-runtime.json" <<'JSON'
+{
+  "critic": {
+    "apiKey": "",
+    "model": "",
+    "baseUrl": "",
+    "endpointPath": "",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "apiKeyEnv": "",
+    "modelEnv": ""
+  }
+}
+JSON
+fi
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/AGENT_GUIDE.txt" \
    "${HOME}/.local/share/opencontext/templates/"
 
 echo -e "${GREEN}✓ Templates created${NC}"
+
+mkdir -p "${HOME}/.config/opencontext"
+if [[ ! -f "${HOME}/.config/opencontext/law-runtime.json" ]]; then
+    if [[ -f "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" ]]; then
+        cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-runtime.json" \
+           "${HOME}/.config/opencontext/law-runtime.json"
+    else
+        cp "${HOME}/.local/share/opencontext/templates/law-runtime.json" \
+           "${HOME}/.config/opencontext/law-runtime.json"
+    fi
+    echo -e "${GREEN}✓ Global runtime config initialized: ${HOME}/.config/opencontext/law-runtime.json${NC}"
+else
+    echo -e "${BLUE}ℹ️  Global runtime config already exists: ${HOME}/.config/opencontext/law-runtime.json${NC}"
+fi
 
 # Verify installation
 echo ""

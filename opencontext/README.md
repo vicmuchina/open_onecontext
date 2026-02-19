@@ -180,6 +180,9 @@ node ./scripts/test-opencode-plugin-watchman-malformed.mjs
 # Run provider-agnostic OpenAI-compatible config test
 node ./scripts/test-opencode-plugin-provider-config.mjs
 
+# Run runtime-config key/model override test (no env export required)
+node ./scripts/test-opencode-plugin-runtime-config.mjs
+
 # Run planning guard test (prevents checkpoint interruption during plan agent)
 node ./scripts/test-opencode-plugin-planning-guard.mjs
 
@@ -218,11 +221,19 @@ Navigate to your project and initialize GCC:
 ```bash
 cd /path/to/your/project
 opencontext init --project-name "MyApp" --goal "Build a web scraper"
+# or infer from an existing markdown spec/blueprint:
+opencontext init --project-name "MyApp" --goal-file SPEC.md
 ```
 
 This creates a `.GCC/` directory with:
 - `main.md` - Project roadmap
 - `branches/main/` - Main branch with commit.md, log.md, metadata.yaml
+
+Goal resolution order during `opencontext init`:
+1. `--goal` text
+2. `--goal-file` markdown content
+3. common files in project root (`SPEC.md`, `spec.md`, `PROJECT_BLUEPRINT.md`, `IMPLEMENTATION.md`, `README.md`)
+4. fallback text: `Project goal not specified`
 
 ### 2. Start OpenCode
 
@@ -248,6 +259,10 @@ export CHUTES_API_KEY="<your_api_key>"
 # Optional model override without editing law file
 export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
 ```
+
+No-repeat key setup:
+- Global file: `~/.config/opencontext/law-runtime.json`
+- Project override: `.GCC/law-runtime.json`
 
 Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but you can switch to any OpenAI-compatible provider:
 
@@ -300,6 +315,8 @@ Custom workflow rules (no plugin code edits needed):
 
 ```bash
 opencontext init --project-name "MyApp" --goal "Build a web scraper"
+# or infer from project docs:
+opencontext init --project-name "MyApp" --goal-file SPEC.md
 opencontext law init
 opencontext law validate
 ```
@@ -359,6 +376,8 @@ opencontext context
 ```bash
 # Initialize GCC in current directory
 opencontext init [--project-name <name>] [--goal <description>]
+# Optional: infer goal text from existing markdown file
+opencontext init [--project-name <name>] [--goal-file SPEC.md]
 
 # Create a checkpoint
 opencontext commit <summary> [--approach <name>] [--status <active|abandoned|merged>]
@@ -673,6 +692,31 @@ user_sessions:
 `~/.config/opencode/opencode.json` controls your OpenCode provider/MCP setup.
 The OpenContext plugin reads this runtime environment and project `.GCC` law files.
 
+### Law Runtime Config (optional, avoids repeated env exports)
+- Global: `~/.config/opencontext/law-runtime.json`
+- Project override: `.GCC/law-runtime.json`
+- Supports:
+  - `critic.apiKey`
+  - `critic.model`
+  - optional provider fields (`baseUrl`, `endpointPath`, `authHeader`, etc.)
+- Precedence:
+  1. environment variables
+  2. project runtime config
+  3. global runtime config
+  4. `.GCC/law-enforcer.json` defaults
+
+Example `law-runtime.json`:
+```json
+{
+  "critic": {
+    "apiKey": "cpk_...",
+    "model": "openai/gpt-oss-120b-TEE",
+    "baseUrl": "https://llm.chutes.ai/v1",
+    "endpointPath": "/chat/completions"
+  }
+}
+```
+
 ### Law Enforcer Policy (Primary)
 `.GCC/law-enforcer.json`:
 
@@ -734,6 +778,7 @@ The OpenContext plugin reads this runtime environment and project `.GCC` law fil
 
 Text policy + handbook files:
 - `.GCC/law-policy.txt` (natural-language workflow laws)
+- `.GCC/law-runtime.json` (project-level API key/model/provider overrides)
 - `.GCC/AGENT_GUIDE.txt` (full agent-readable setup/customization guide)
 
 Customizing without code changes:

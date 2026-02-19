@@ -121,6 +121,38 @@ opencontext context --metadata approaches
 opencontext context --export --format json
 ```
 
+### 5. LAW - Configure Enforcer Behavior
+
+**When to use:** Initialize/validate/edit enforcement rules and provider settings for future turns.
+
+```bash
+# Create policy + runtime + guide files in .GCC
+opencontext law init
+
+# Validate law config structure
+opencontext law validate
+
+# Show active enforcement status
+opencontext law status
+
+# Regenerate agent handbook in .GCC
+opencontext law guide
+```
+
+**What it does:**
+- Makes enforcement behavior explicit and editable by agents.
+- Keeps provider/model config, custom rules, and policy text synchronized.
+
+### 6. HELP - Self-Discovery in Session
+
+```bash
+opencontext --help
+opencontext context --help
+opencontext law --help
+```
+
+Use these whenever an agent needs to confirm command purpose or flags before acting.
+
 ## Workflow Patterns
 
 ### Pattern 1: Session Handoff

@@ -5,5 +5,9 @@ This file is generated per project by:
 - opencontext law guide
 - opencontext setup-opencode (project mode)
 
+Related runtime config files:
+- .GCC/law-runtime.json
+- ~/.config/opencontext/law-runtime.json
+
 If you see this template directly, regenerate project guide:
 opencontext law guide

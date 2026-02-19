@@ -42,14 +42,16 @@ To avoid hardcoded enforcement and make future customization agent-friendly:
    - `custom.hints` to advertise preferred tools/skills/commands/MCPs
 2. Added `.GCC/law-policy.txt`
    - Natural-language policy file loaded into watchman payload
-3. Added `.GCC/AGENT_GUIDE.txt`
+3. Added `.GCC/law-runtime.json`
+   - Project-local provider key/model overrides (no repeated env exports required)
+4. Added `.GCC/AGENT_GUIDE.txt`
    - Generated plain-text handbook for coding agents
    - Explains all parameters and edit points
-4. Added per-rule counters in session state + trace
+5. Added per-rule counters in session state + trace
    - `law.custom.violation` rows in `.GCC/law-enforcer-trace.jsonl`
-5. Added `opencontext law guide`
+6. Added `opencontext law guide`
    - Regenerates `AGENT_GUIDE.txt` from current project law settings
-6. Auto-generation on:
+7. Auto-generation on:
    - `opencontext init`
    - `opencontext law init`
    - `opencontext setup-opencode` (project mode with `.GCC`)

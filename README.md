@@ -13,6 +13,7 @@ This repository contains the OpenContext system (GCC memory workflow) plus the O
 - `IMPLEMENTATION.md` - implementation decisions, scope, and behavior guarantees.
 - `.GCC/AGENT_GUIDE.txt` - generated per-project plain-text handbook for coding agents (how to configure laws, prompts, providers, and escalation).
 - `.GCC/law-policy.txt` - editable natural-language law policy consumed by the watchman model.
+- `.GCC/law-runtime.json` - optional per-project provider key/model overrides (no repeated env export).
 - `opencontext/README.md` - full end-user guide for OpenContext CLI + plugin usage.
 - `opencontext/TEST_RESULTS.md` - recorded test runs and verification snapshots.
 - `opencontext/docs/SKILL.md` - OpenCode skill instructions for using OpenContext in agent sessions.

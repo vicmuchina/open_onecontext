@@ -2,6 +2,7 @@ include opencontext/plugin/opencontext-reminder.js
 include opencontext/plugin/law-enforcer.json
 include opencontext/plugin/law-enforcer.yaml
 include opencontext/plugin/law-policy.txt
+include opencontext/plugin/law-runtime.json
 include opencontext/plugin/AGENT_GUIDE.txt
 include opencontext/docs/SKILL.md
 include opencontext/docs/papers/*.md

@@ -46,6 +46,8 @@ cp ~/.local/share/opencontext/opencontext/docs/SKILL.md \
 
 cd /path/to/project
 opencontext init --project-name "<name>" --goal "<goal>"
+# or infer goal from an existing markdown spec:
+opencontext init --project-name "<name>" --goal-file SPEC.md
 opencontext law init
 opencontext law validate
 opencontext law guide
@@ -63,6 +65,10 @@ opencontext law guide
 - Export API key:
   export CHUTES_API_KEY="<key>"
   # or whichever env name matches critic.apiKeyEnv
+
+- Or set once in runtime config files:
+  - ~/.config/opencontext/law-runtime.json (global)
+  - .GCC/law-runtime.json (project override)
 
 7) Customize behavior (no plugin edits)
 
@@ -86,6 +92,7 @@ node ~/.local/share/opencontext/scripts/test-opencode-plugin-watchman-malformed.
 node ~/.local/share/opencontext/scripts/test-opencode-plugin-provider-config.mjs
 node ~/.local/share/opencontext/scripts/test-opencode-plugin-planning-guard.mjs
 node ~/.local/share/opencontext/scripts/test-opencode-plugin-custom-rules.mjs
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-runtime-config.mjs
 ~/.local/share/opencontext/scripts/test-opencontext-law-assets.sh
 
 # live server integration test

@@ -35,11 +35,14 @@ OpenContext is a Git-like context controller (GCC) for long-horizon LLM coding w
 - Natural-language law instructions consumed by watchman on every inspection.
 - Easy to edit by users/agents without changing plugin code.
 
-5. Agent Handbook (`.GCC/AGENT_GUIDE.txt`)
+5. Runtime Config (`.GCC/law-runtime.json` and `~/.config/opencontext/law-runtime.json`)
+- Optional provider key/model overrides so users do not need repeated `export` commands.
+
+6. Agent Handbook (`.GCC/AGENT_GUIDE.txt`)
 - Generated plain-text guide for coding agents.
 - Documents all configurable parameters and day-to-day workflow commands.
 
-6. Trace Log (`.GCC/law-enforcer-trace.jsonl`)
+7. Trace Log (`.GCC/law-enforcer-trace.jsonl`)
 - Verifiable request/response evidence.
 - Includes tool-call evidence and watchman verdicts.
 

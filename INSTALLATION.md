@@ -57,6 +57,7 @@ After installation, you'll find:
 ~/.local/share/opencontext/          # Source code and templates
 ~/.config/opencode/plugins/          # OpenCode plugin
 ~/.config/opencode/skills/opencontext/  # OpenContext skill
+~/.config/opencontext/law-runtime.json  # Global provider key/model overrides
 ~/.local/bin/opencontext             # CLI executable (if in PATH)
 ```
 
@@ -67,6 +68,7 @@ With `--local`, these are also created in your project:
 /path/to/project/.opencode/skills/opencontext/SKILL.md
 /path/to/project/.GCC/law-enforcer.json   # if .GCC already exists
 /path/to/project/.GCC/law-policy.txt      # if .GCC already exists
+/path/to/project/.GCC/law-runtime.json    # provider key/model overrides (project-local)
 /path/to/project/.GCC/AGENT_GUIDE.txt     # generated guide for agents
 ```
 
@@ -118,7 +120,11 @@ ls ~/.config/opencode/skills/opencontext/SKILL.md
 ```bash
 cd /path/to/your/project
 opencontext init --project-name "MyProject" --goal "Project description"
+# or derive goal from existing spec file
+opencontext init --project-name "MyProject" --goal-file SPEC.md
 ```
+
+If neither option is set, OpenContext tries `SPEC.md`/`PROJECT_BLUEPRINT.md`/`IMPLEMENTATION.md`/`README.md`, then falls back to: `Project goal not specified`.
 
 ### 3. Start OpenCode
 
@@ -148,6 +154,10 @@ export CHUTES_API_KEY="<your_api_key>"
 # Optional model override (default is openai/gpt-oss-120b-TEE)
 export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
 ```
+
+Set once using config files (no repeated `export`):
+- Global: `~/.config/opencontext/law-runtime.json`
+- Project: `.GCC/law-runtime.json` (overrides global)
 
 You can also edit `.GCC/law-enforcer.json` for any OpenAI-compatible provider:
 
