@@ -15,6 +15,8 @@ const CONFIG = {
   gccDir: ".GCC",
   lawFileNameJson: "law-enforcer.json",
   lawFileNameYaml: "law-enforcer.yaml",
+  lawPolicyFileName: "law-policy.txt",
+  agentGuideFileName: "AGENT_GUIDE.txt",
   traceFileName: "law-enforcer-trace.jsonl",
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
@@ -81,6 +83,29 @@ const DEFAULT_LAW = {
   observability: {
     traceEnabled: true,
     traceFile: "law-enforcer-trace.jsonl",
+  },
+  custom: {
+    enabled: true,
+    policyFile: "law-policy.txt",
+    exemptAgentPatterns: ["plan", "planner"],
+    escalation: {
+      mode: "soft_then_hard",
+      softViolationsBeforeInterrupt: 1,
+      hardInterruptThreshold: 2,
+      reminderCooldownSeconds: 20,
+      resetOnCommit: true,
+    },
+    rules: [],
+    hints: {
+      availableTools: [],
+      availableSkills: [],
+      preferredCommands: [],
+      importantMcpServers: [],
+    },
+  },
+  agentGuide: {
+    path: ".GCC/AGENT_GUIDE.txt",
+    includeInWatchmanPayload: true,
   },
 };
 
@@ -149,6 +174,8 @@ function getSessionState(sessionId) {
       lastInspectedAssistantMessageId: "",
       lastAssistantMessageId: "",
       lastAssistantText: "",
+      customRuleViolations: {},
+      customRuleReminderAt: {},
     });
   }
   return sessionStateById.get(resolvedSessionId);
@@ -329,6 +356,66 @@ function parseYamlLike(content) {
   return root;
 }
 
+function normalizeStringArray(value, fallback = []) {
+  const source = Array.isArray(value) ? value : fallback;
+  return source
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+}
+
+function normalizeRuleTrigger(trigger) {
+  const value = String(trigger || "").trim().toLowerCase();
+  if (!value) return "";
+  if (["assistant_turn", "assistant", "message"].includes(value)) return "assistant_turn";
+  if (["tool_call", "tool", "tool.execute.after"].includes(value)) return "tool_call";
+  if (["compaction", "session.compacted"].includes(value)) return "compaction";
+  if (["idle", "session.idle"].includes(value)) return "idle";
+  return value;
+}
+
+function normalizeCustomRule(rawRule, index = 0) {
+  const rule = rawRule && typeof rawRule === "object" ? rawRule : {};
+  const idFallback = `custom_rule_${index + 1}`;
+  const id = String(rule.id || rule.name || idFallback).trim() || idFallback;
+  const triggersRaw = normalizeStringArray(rule.triggers, []);
+  const triggers = triggersRaw
+    .map(normalizeRuleTrigger)
+    .filter((value) => ["assistant_turn", "tool_call", "compaction", "idle"].includes(value));
+  const when = rule.when && typeof rule.when === "object" ? rule.when : {};
+  const requireShape = rule.require && typeof rule.require === "object" ? rule.require : {};
+  const interruptAfter = Number(rule.interruptAfterViolations);
+  return {
+    id,
+    enabled: rule.enabled !== false,
+    description: String(rule.description || "").trim(),
+    severity: String(rule.severity || "medium").trim().toLowerCase(),
+    triggers,
+    when: {
+      taskKeywords: normalizeStringArray(when.taskKeywords, []),
+      toolIncludes: normalizeStringArray(when.toolIncludes, []),
+      toolExcludes: normalizeStringArray(when.toolExcludes, []),
+      commandIncludes: normalizeStringArray(when.commandIncludes, []),
+      commandRegex: normalizeStringArray(when.commandRegex, []),
+      assistantIncludes: normalizeStringArray(when.assistantIncludes, []),
+      outputIncludes: normalizeStringArray(when.outputIncludes, []),
+      debtFlags: normalizeStringArray(when.debtFlags, []),
+    },
+    require: {
+      anyTools: normalizeStringArray(requireShape.anyTools, []),
+      anyCommands: normalizeStringArray(requireShape.anyCommands, []),
+      guidance: String(requireShape.guidance || "").trim(),
+    },
+    interruptAfterViolations: Number.isFinite(interruptAfter)
+      ? Math.max(1, Math.min(20, Math.round(interruptAfter)))
+      : null,
+  };
+}
+
+function toBool(value, fallback) {
+  if (typeof value === "boolean") return value;
+  return fallback;
+}
+
 function sanitizeLaw(law) {
   const sanitized = deepMerge(DEFAULT_LAW, law || {});
   if (!Number.isFinite(sanitized.gcc.requireCheckpointEveryTools)) {
@@ -432,6 +519,98 @@ function sanitizeLaw(law) {
   if (!Array.isArray(sanitized.research.docsKeywords)) {
     sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
   }
+  sanitized.custom = sanitized.custom && typeof sanitized.custom === "object"
+    ? sanitized.custom
+    : {};
+  sanitized.custom.enabled = toBool(sanitized.custom.enabled, true);
+  sanitized.custom.policyFile = typeof sanitized.custom.policyFile === "string" && sanitized.custom.policyFile.trim()
+    ? sanitized.custom.policyFile.trim()
+    : CONFIG.lawPolicyFileName;
+  sanitized.custom.exemptAgentPatterns = normalizeStringArray(
+    sanitized.custom.exemptAgentPatterns,
+    DEFAULT_LAW.custom.exemptAgentPatterns
+  );
+  sanitized.custom.rules = Array.isArray(sanitized.custom.rules)
+    ? sanitized.custom.rules.map((rule, index) => normalizeCustomRule(rule, index))
+    : [];
+  sanitized.custom.hints = sanitized.custom.hints && typeof sanitized.custom.hints === "object"
+    ? sanitized.custom.hints
+    : {};
+  sanitized.custom.hints.availableTools = normalizeStringArray(
+    sanitized.custom.hints.availableTools,
+    []
+  );
+  sanitized.custom.hints.availableSkills = normalizeStringArray(
+    sanitized.custom.hints.availableSkills,
+    []
+  );
+  sanitized.custom.hints.preferredCommands = normalizeStringArray(
+    sanitized.custom.hints.preferredCommands,
+    []
+  );
+  sanitized.custom.hints.importantMcpServers = normalizeStringArray(
+    sanitized.custom.hints.importantMcpServers,
+    []
+  );
+  sanitized.custom.escalation = sanitized.custom.escalation && typeof sanitized.custom.escalation === "object"
+    ? sanitized.custom.escalation
+    : {};
+  sanitized.custom.escalation.mode = String(
+    sanitized.custom.escalation.mode || DEFAULT_LAW.custom.escalation.mode
+  ).trim().toLowerCase();
+  if (!["soft_then_hard", "hard_only", "soft_only"].includes(sanitized.custom.escalation.mode)) {
+    sanitized.custom.escalation.mode = DEFAULT_LAW.custom.escalation.mode;
+  }
+  sanitized.custom.escalation.softViolationsBeforeInterrupt = Math.max(
+    0,
+    Math.min(
+      20,
+      Math.round(
+        Number(
+          sanitized.custom.escalation.softViolationsBeforeInterrupt
+            ?? DEFAULT_LAW.custom.escalation.softViolationsBeforeInterrupt
+        )
+      )
+    )
+  );
+  sanitized.custom.escalation.hardInterruptThreshold = Math.max(
+    1,
+    Math.min(
+      30,
+      Math.round(
+        Number(
+          sanitized.custom.escalation.hardInterruptThreshold
+            ?? DEFAULT_LAW.custom.escalation.hardInterruptThreshold
+        )
+      )
+    )
+  );
+  sanitized.custom.escalation.reminderCooldownSeconds = Math.max(
+    0,
+    Math.min(
+      600,
+      Math.round(
+        Number(
+          sanitized.custom.escalation.reminderCooldownSeconds
+            ?? DEFAULT_LAW.custom.escalation.reminderCooldownSeconds
+        )
+      )
+    )
+  );
+  sanitized.custom.escalation.resetOnCommit = toBool(
+    sanitized.custom.escalation.resetOnCommit,
+    true
+  );
+  sanitized.agentGuide = sanitized.agentGuide && typeof sanitized.agentGuide === "object"
+    ? sanitized.agentGuide
+    : {};
+  sanitized.agentGuide.path = typeof sanitized.agentGuide.path === "string" && sanitized.agentGuide.path.trim()
+    ? sanitized.agentGuide.path.trim()
+    : DEFAULT_LAW.agentGuide.path;
+  sanitized.agentGuide.includeInWatchmanPayload = toBool(
+    sanitized.agentGuide.includeInWatchmanPayload,
+    true
+  );
   return sanitized;
 }
 
@@ -440,6 +619,23 @@ function getLawPaths(directory) {
     join(directory, CONFIG.gccDir, CONFIG.lawFileNameJson),
     join(directory, CONFIG.gccDir, CONFIG.lawFileNameYaml),
   ];
+}
+
+function getLawPolicyPath(directory, law) {
+  const fileName = String(law?.custom?.policyFile || CONFIG.lawPolicyFileName).trim();
+  return join(directory, CONFIG.gccDir, fileName || CONFIG.lawPolicyFileName);
+}
+
+function getAgentGuidePath(directory, law) {
+  const configured = String(law?.agentGuide?.path || "").trim();
+  if (!configured) return join(directory, CONFIG.gccDir, CONFIG.agentGuideFileName);
+  if (configured.startsWith(CONFIG.gccDir)) {
+    return join(directory, configured);
+  }
+  if (configured.startsWith("/")) {
+    return configured;
+  }
+  return join(directory, configured);
 }
 
 async function loadLaw(client, directory) {
@@ -473,6 +669,32 @@ async function loadLaw(client, directory) {
     await log(client, "debug", "law.default_used", { lawPath });
   }
   const law = sanitizeLaw(parsed);
+  const policyPath = getLawPolicyPath(directory, law);
+  law.custom.policyPath = policyPath;
+  law.custom.policyText = "";
+  if (existsSync(policyPath)) {
+    try {
+      law.custom.policyText = clipText(readFileSync(policyPath, "utf-8"), 15000);
+    } catch (error) {
+      await log(client, "warn", "law.policy_load_failed", {
+        policyPath,
+        error: error?.message ?? String(error),
+      });
+    }
+  }
+  const guidePath = getAgentGuidePath(directory, law);
+  law.agentGuide.pathResolved = guidePath;
+  law.agentGuide.text = "";
+  if (law.agentGuide.includeInWatchmanPayload && existsSync(guidePath)) {
+    try {
+      law.agentGuide.text = clipText(readFileSync(guidePath, "utf-8"), 18000);
+    } catch (error) {
+      await log(client, "warn", "law.agent_guide_load_failed", {
+        guidePath,
+        error: error?.message ?? String(error),
+      });
+    }
+  }
   lawCache = {
     fetchedAt: Date.now(),
     path: lawPath,
@@ -549,8 +771,10 @@ function extractCommandFromArgs(args) {
   if (!args || typeof args !== "object") return "";
   if (typeof args.command === "string") return args.command;
   if (typeof args.cmd === "string") return args.cmd;
-  if (typeof args.input === "string") return args.input;
   if (typeof args.script === "string") return args.script;
+  if (typeof args.input === "string") return args.input;
+  if (Array.isArray(args.commands)) return args.commands.join(" && ");
+  if (Array.isArray(args.cmd)) return args.cmd.join(" && ");
   if (Array.isArray(args.command)) return args.command.join(" ");
   return JSON.stringify(args);
 }
@@ -618,13 +842,23 @@ function detectFailureSignal(tool, output) {
   );
 }
 
-function isPlanningAgentName(agent) {
+function isPlanningAgentName(agent, law) {
   const text = toLowerSafe(agent);
-  return text.includes("plan");
+  if (!text) return false;
+  const patterns = normalizeStringArray(
+    law?.custom?.exemptAgentPatterns,
+    DEFAULT_LAW.custom.exemptAgentPatterns
+  ).map((entry) => entry.toLowerCase());
+  return patterns.some((entry) => entry && text.includes(entry));
 }
 
 function isLikelyReadOnlyBashCommand(commandText) {
-  const text = String(commandText || "").trim().toLowerCase();
+  const raw = String(commandText || "").trim();
+  if (!raw) return false;
+
+  // Unwrap common shell wrappers: bash -lc "<command>" / sh -c "<command>".
+  const wrapped = raw.match(/^(?:bash|sh|zsh)\s+-[a-z]*c\s+["']([\s\S]+)["']$/i);
+  const text = (wrapped ? wrapped[1] : raw).trim().toLowerCase();
   if (!text) return false;
 
   const mutatingSignals = [
@@ -685,7 +919,7 @@ function shouldIncrementCheckpointDebt({ law, state, tool, commandText }) {
   }
   if (
     law?.gcc?.skipCheckpointDuringPlanningAgent &&
-    isPlanningAgentName(state?.lastAgent)
+    isPlanningAgentName(state?.lastAgent, law)
   ) {
     return false;
   }
@@ -794,6 +1028,22 @@ function buildLawSummaryForInspector(law) {
     gcc: law.gcc,
     mcp: law.mcp,
     research: law.research,
+    custom: {
+      enabled: law.custom.enabled,
+      escalation: law.custom.escalation,
+      rules: law.custom.rules.map((rule) => ({
+        id: rule.id,
+        enabled: rule.enabled,
+        description: rule.description,
+        severity: rule.severity,
+        triggers: rule.triggers,
+        when: rule.when,
+        require: rule.require,
+        interruptAfterViolations: rule.interruptAfterViolations,
+      })),
+      hints: law.custom.hints,
+      policyFile: law.custom.policyFile,
+    },
     watchman: {
       enabled: law.watchman.enabled,
       inspectAssistantTurns: law.watchman.inspectAssistantTurns,
@@ -802,7 +1052,182 @@ function buildLawSummaryForInspector(law) {
       inspectOnIdle: law.watchman.inspectOnIdle,
       skipDuringPlanningAgent: law.watchman.skipDuringPlanningAgent,
     },
+    agentGuide: {
+      includeInWatchmanPayload: law.agentGuide.includeInWatchmanPayload,
+      path: law.agentGuide.path,
+    },
   };
+}
+
+function includesAny(haystack, needles) {
+  const text = toLowerSafe(haystack);
+  return normalizeStringArray(needles, []).some((needle) => text.includes(toLowerSafe(needle)));
+}
+
+function matchRegexAny(text, patterns) {
+  const source = String(text || "");
+  for (const pattern of normalizeStringArray(patterns, [])) {
+    try {
+      const re = new RegExp(pattern, "i");
+      if (re.test(source)) return true;
+    } catch {
+      // Ignore invalid regex patterns from user config.
+    }
+  }
+  return false;
+}
+
+function getDebtFlagValue(state, name) {
+  const key = String(name || "").trim();
+  if (!key) return false;
+  const mapping = {
+    pendingCompactionCheckpoint: Boolean(state?.pendingCompactionCheckpoint),
+    pendingResearchCapture: Boolean(state?.pendingResearchCapture),
+    pendingFailureLookup: Boolean(state?.pendingFailureLookup),
+    hasViolationDebt: Boolean(state?.hasViolationDebt),
+    mcpUsed: Boolean(state?.mcpUsed),
+  };
+  if (Object.prototype.hasOwnProperty.call(mapping, key)) {
+    return mapping[key];
+  }
+  return false;
+}
+
+function collectRecentCommandTexts(state) {
+  return state.recentToolExecutions
+    .slice(-12)
+    .map((entry) => String(entry?.commandText || "").trim())
+    .filter(Boolean);
+}
+
+function shouldInspectCustomRuleForTrigger(rule, trigger) {
+  if (!Array.isArray(rule?.triggers) || rule.triggers.length === 0) return true;
+  return rule.triggers.includes(trigger);
+}
+
+function customRuleWhenMatches(rule, context) {
+  const when = rule.when || {};
+  const tool = toLowerSafe(context.tool);
+  const command = String(context.commandText || "");
+  const commandLower = toLowerSafe(command);
+  const assistantText = toLowerSafe(context.assistantText);
+  const outputText = toLowerSafe(context.toolOutput);
+  const corpus = `${tool}\n${commandLower}\n${assistantText}\n${outputText}`;
+
+  if (when.taskKeywords.length > 0 && !includesAny(corpus, when.taskKeywords)) {
+    return false;
+  }
+  if (when.toolIncludes.length > 0 && !includesAny(tool, when.toolIncludes)) {
+    return false;
+  }
+  if (when.toolExcludes.length > 0 && includesAny(tool, when.toolExcludes)) {
+    return false;
+  }
+  if (when.commandIncludes.length > 0 && !includesAny(commandLower, when.commandIncludes)) {
+    return false;
+  }
+  if (when.commandRegex.length > 0 && !matchRegexAny(command, when.commandRegex)) {
+    return false;
+  }
+  if (when.assistantIncludes.length > 0 && !includesAny(assistantText, when.assistantIncludes)) {
+    return false;
+  }
+  if (when.outputIncludes.length > 0 && !includesAny(outputText, when.outputIncludes)) {
+    return false;
+  }
+  if (when.debtFlags.length > 0) {
+    const anyDebt = when.debtFlags.some((flag) => getDebtFlagValue(context.state, flag));
+    if (!anyDebt) return false;
+  }
+  return true;
+}
+
+function checkCustomRuleRequirement(rule, context) {
+  const requirement = rule.require || {};
+  const missing = [];
+  const recentTools = context.state.recentTools.slice(-12).map((name) => toLowerSafe(name));
+  const currentTool = toLowerSafe(context.tool);
+  const toolsToCheck = [currentTool, ...recentTools];
+  const recentCommands = [
+    String(context.commandText || ""),
+    ...collectRecentCommandTexts(context.state),
+  ];
+  const recentCommandBlob = recentCommands.join("\n").toLowerCase();
+
+  if (Array.isArray(requirement.anyTools) && requirement.anyTools.length > 0) {
+    const hasAnyRequiredTool = requirement.anyTools.some((expected) => {
+      const needle = toLowerSafe(expected);
+      return toolsToCheck.some((toolName) => toolName.includes(needle));
+    });
+    if (!hasAnyRequiredTool) {
+      missing.push(`use one of tools: ${requirement.anyTools.join(", ")}`);
+    }
+  }
+
+  if (Array.isArray(requirement.anyCommands) && requirement.anyCommands.length > 0) {
+    const hasAnyRequiredCommand = requirement.anyCommands.some((expected) => {
+      const needle = toLowerSafe(expected);
+      return recentCommandBlob.includes(needle);
+    });
+    if (!hasAnyRequiredCommand) {
+      missing.push(`run one of commands/patterns: ${requirement.anyCommands.join(", ")}`);
+    }
+  }
+
+  return {
+    ok: missing.length === 0,
+    missing,
+    guidance: requirement.guidance || "",
+  };
+}
+
+function evaluateCustomRules({ law, state, trigger, tool, commandText, toolOutput }) {
+  if (!law.custom.enabled) return [];
+  if (isPlanningAgentName(state?.lastAgent, law)) return [];
+  const rules = Array.isArray(law.custom.rules) ? law.custom.rules : [];
+  const assistantText = state?.lastAssistantText || "";
+  const violations = [];
+
+  for (const rule of rules) {
+    if (!rule || rule.enabled === false) continue;
+    if (!shouldInspectCustomRuleForTrigger(rule, trigger)) continue;
+    const context = {
+      law,
+      state,
+      trigger,
+      tool,
+      commandText,
+      toolOutput,
+      assistantText,
+    };
+    if (!customRuleWhenMatches(rule, context)) continue;
+    const requirement = checkCustomRuleRequirement(rule, context);
+    if (requirement.ok) continue;
+
+    const commands = [];
+    if (Array.isArray(rule.require?.anyCommands) && rule.require.anyCommands.length > 0) {
+      for (const cmd of rule.require.anyCommands.slice(0, 4)) {
+        commands.push(cmd);
+      }
+    }
+    if (requirement.guidance) {
+      commands.push(requirement.guidance);
+    }
+
+    violations.push({
+      id: rule.id,
+      severity: rule.severity || "medium",
+      description: rule.description || "",
+      interruptAfterViolations: rule.interruptAfterViolations,
+      rule: `custom_rule:${rule.id}`,
+      detail: requirement.missing.join("; "),
+      commands,
+      source: "custom_rule",
+      useCritic: false,
+    });
+  }
+
+  return violations;
 }
 
 function buildViolationPrompt({ rule, detail, commands }) {
@@ -1272,7 +1697,7 @@ async function runWatchmanCheck(client, law, payload) {
         {
           role: "system",
           content:
-            "You are the OpenContext Law Enforcer Watchman. Judge only workflow-law compliance and respond in strict JSON schema.",
+            "You are the OpenContext Law Enforcer Watchman. Judge only workflow-law compliance against policy text, configured custom rules, and observed tool behavior. Respond in strict JSON schema.",
         },
         {
           role: "user",
@@ -1392,7 +1817,92 @@ async function maybeInterrupt(client, directory, law, state, violation) {
   return injected;
 }
 
-function buildViolations({ directory, law, state, tool, commandText, toolOutput, hasGCC, planningAgentActive }) {
+function shouldHardInterruptCustomRule(law, violationCount, ruleSpecificThreshold = null) {
+  const mode = law?.custom?.escalation?.mode || "soft_then_hard";
+  if (mode === "soft_only") return false;
+  if (mode === "hard_only") return true;
+  const thresholdDefault = Number(law?.custom?.escalation?.hardInterruptThreshold ?? 2);
+  const threshold = ruleSpecificThreshold || thresholdDefault;
+  return violationCount >= Math.max(1, threshold);
+}
+
+function shouldEmitSoftReminder(law, violationCount) {
+  const mode = law?.custom?.escalation?.mode || "soft_then_hard";
+  if (mode === "hard_only") return false;
+  const softBeforeInterrupt = Number(law?.custom?.escalation?.softViolationsBeforeInterrupt ?? 1);
+  return violationCount <= Math.max(0, softBeforeInterrupt);
+}
+
+async function maybeHandleCustomRuleViolation(client, directory, law, state, violation) {
+  if (!violation?.id) return false;
+  const ruleKey = String(violation.id);
+  const nextCount = Number(state.customRuleViolations[ruleKey] || 0) + 1;
+  state.customRuleViolations[ruleKey] = nextCount;
+
+  const now = Date.now();
+  const reminderCooldownMs = Math.max(
+    0,
+    Number(law?.custom?.escalation?.reminderCooldownSeconds || 0) * 1000
+  );
+  const lastReminderAt = Number(state.customRuleReminderAt[ruleKey] || 0);
+
+  await appendLawTrace(client, directory, law, {
+    type: "law.custom.violation",
+    sessionId: state.sessionId,
+    trigger: violation.trigger || "",
+    rule: {
+      id: ruleKey,
+      severity: violation.severity || "medium",
+      count: nextCount,
+      description: violation.description || "",
+    },
+    detail: violation.detail,
+    commands: violation.commands || [],
+  });
+
+  const hardInterrupt = shouldHardInterruptCustomRule(
+    law,
+    nextCount,
+    violation.interruptAfterViolations
+  );
+  if (hardInterrupt) {
+    return await maybeInterrupt(client, directory, law, state, violation);
+  }
+
+  const shouldSoftRemind = shouldEmitSoftReminder(law, nextCount);
+  if (!shouldSoftRemind) return false;
+  if (reminderCooldownMs > 0 && now - lastReminderAt < reminderCooldownMs) return false;
+
+  state.customRuleReminderAt[ruleKey] = now;
+  await log(client, "warn", "law.custom.reminder", {
+    sessionId: state.sessionId,
+    rule: ruleKey,
+    count: nextCount,
+    detail: violation.detail,
+  });
+  const reminderCommands = Array.isArray(violation.commands) && violation.commands.length > 0
+    ? `\nExpected action:\n- ${violation.commands.join("\n- ")}`
+    : "";
+  await toast(client, {
+    type: "warning",
+    timeout: 10000,
+    message:
+      `⚖️ Law Enforcer reminder (${ruleKey})\n${violation.detail}${reminderCommands}`,
+  });
+  return false;
+}
+
+function buildViolations({
+  directory,
+  law,
+  state,
+  tool,
+  commandText,
+  toolOutput,
+  hasGCC,
+  planningAgentActive,
+  trigger,
+}) {
   const violations = [];
   const checkpointEvery = law.gcc.requireCheckpointEveryTools;
 
@@ -1419,6 +1929,7 @@ function buildViolations({ directory, law, state, tool, commandText, toolOutput,
   }
 
   if (
+    trigger !== "tool_call" &&
     state.sinceCommitCount >= checkpointEvery &&
     isGCCInitialized(directory) &&
     !(planningAgentActive && law.gcc.skipCheckpointDuringPlanningAgent)
@@ -1494,11 +2005,12 @@ async function evaluateAndEnforce({
     directory,
     law,
     state,
+    trigger,
     tool: tool || "unknown",
     commandText: commandText || "",
     toolOutput: toolOutput || "",
     hasGCC,
-    planningAgentActive: isPlanningAgentName(state?.lastAgent),
+    planningAgentActive: isPlanningAgentName(state?.lastAgent, law),
   });
 
   if (violations.length > 0) {
@@ -1512,13 +2024,43 @@ async function evaluateAndEnforce({
     if (injected) return true;
   }
 
+  const customViolations = evaluateCustomRules({
+    law,
+    state,
+    trigger,
+    tool: tool || "unknown",
+    commandText: commandText || "",
+    toolOutput: toolOutput || "",
+  });
+  if (customViolations.length > 0) {
+    violationDetected = true;
+    const primary = {
+      ...customViolations[0],
+      trigger,
+    };
+    await log(client, "warn", "law.custom.violation.detected", {
+      sessionId: state.sessionId,
+      trigger,
+      rule: primary.id,
+      severity: primary.severity,
+    });
+    const interrupted = await maybeHandleCustomRuleViolation(
+      client,
+      directory,
+      law,
+      state,
+      primary
+    );
+    if (interrupted) return true;
+  }
+
   const shouldRunWatchman =
     law.watchman.enabled &&
     ((trigger === "assistant_turn" && law.watchman.inspectAssistantTurns) ||
       (trigger === "tool_call" && law.watchman.inspectToolCalls) ||
       (trigger === "compaction" && law.watchman.inspectCompaction) ||
       (trigger === "idle" && law.watchman.inspectOnIdle)) &&
-    !(law.watchman.skipDuringPlanningAgent && isPlanningAgentName(state?.lastAgent));
+    !(law.watchman.skipDuringPlanningAgent && isPlanningAgentName(state?.lastAgent, law));
 
   if (!shouldRunWatchman || state.inspectorInFlight) {
     if (!violationDetected) {
@@ -1547,10 +2089,13 @@ async function evaluateAndEnforce({
     const watchmanPayload = {
       trigger,
       law: buildLawSummaryForInspector(law),
+      lawPolicyText: law?.custom?.policyText || "",
+      agentGuideText: law?.agentGuide?.includeInWatchmanPayload ? law?.agentGuide?.text || "" : "",
       latestAssistant,
       recentMessages: evidence.recentMessages,
       recentToolCalls: evidence.recentToolCalls,
       debts: evidence.debts,
+      customRuleCounters: state.customRuleViolations,
     };
     await appendLawTrace(client, directory, law, {
       type: "watchman.request",
@@ -1562,6 +2107,8 @@ async function evaluateAndEnforce({
         recentMessages: evidence.recentMessages,
         recentToolCalls: evidence.recentToolCalls,
         debts: evidence.debts,
+        customRuleCounters: state.customRuleViolations,
+        lawPolicyText: clipText(law?.custom?.policyText || "", 1200),
       },
     });
 
@@ -1640,6 +2187,8 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         await log(client, "debug", "event session.created");
         if (state) {
           state.consecutiveInjections = 0;
+          state.customRuleViolations = {};
+          state.customRuleReminderAt = {};
         }
         const hasGCC = isGCCInitialized(directory);
         if (!hasGCC) {
@@ -1818,6 +2367,31 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 - Before retrying failed implementations, retrieve previous attempts via opencontext context --search/--log.
 - Use relevant MCP tools when they can improve retrieval, docs grounding, or execution quality.`
       );
+      if (law?.custom?.enabled) {
+        const policyText = clipText(law?.custom?.policyText || "", 1800);
+        const hints = law?.custom?.hints || {};
+        const hintLines = [];
+        if (Array.isArray(hints.availableTools) && hints.availableTools.length > 0) {
+          hintLines.push(`Preferred tools: ${hints.availableTools.join(", ")}`);
+        }
+        if (Array.isArray(hints.availableSkills) && hints.availableSkills.length > 0) {
+          hintLines.push(`Preferred skills: ${hints.availableSkills.join(", ")}`);
+        }
+        if (Array.isArray(hints.preferredCommands) && hints.preferredCommands.length > 0) {
+          hintLines.push(`Preferred commands: ${hints.preferredCommands.join(" | ")}`);
+        }
+        if (Array.isArray(hints.importantMcpServers) && hints.importantMcpServers.length > 0) {
+          hintLines.push(`Important MCP servers: ${hints.importantMcpServers.join(", ")}`);
+        }
+        if (policyText) {
+          output.system.push(
+            `OpenContext Custom Policy (from .GCC/${law.custom.policyFile}):\n${policyText}`
+          );
+        }
+        if (hintLines.length > 0) {
+          output.system.push(`OpenContext Custom Hints:\n- ${hintLines.join("\n- ")}`);
+        }
+      }
 
       if (!hasGCC) {
         await log(client, "debug", "system prompt augmented (no gcc)");
@@ -1906,6 +2480,10 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         state.pendingResearchCapture = false;
         state.hasViolationDebt = false;
         state.consecutiveInjections = 0;
+        if (law?.custom?.escalation?.resetOnCommit !== false) {
+          state.customRuleViolations = {};
+          state.customRuleReminderAt = {};
+        }
       }
       if (isOpenContextContextLookup(commandText)) {
         state.pendingFailureLookup = false;

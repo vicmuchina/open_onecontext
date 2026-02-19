@@ -33,6 +33,27 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
 8. Fall back to deterministic rule checks if watchman model is unavailable
 9. Require structured JSON-schema responses from watchman/critic (OpenAI-compatible `response_format`), with strict retry on malformed outputs and no free-text fallback interruption
 
+## v3 Solution Overview (User-Programmable Laws)
+To avoid hardcoded enforcement and make future customization agent-friendly:
+
+1. Added `custom` section in `.GCC/law-enforcer.json`
+   - `custom.rules` for trigger-based checks (`assistant_turn`, `tool_call`, `compaction`, `idle`)
+   - `custom.escalation` for soft-then-hard behavior
+   - `custom.hints` to advertise preferred tools/skills/commands/MCPs
+2. Added `.GCC/law-policy.txt`
+   - Natural-language policy file loaded into watchman payload
+3. Added `.GCC/AGENT_GUIDE.txt`
+   - Generated plain-text handbook for coding agents
+   - Explains all parameters and edit points
+4. Added per-rule counters in session state + trace
+   - `law.custom.violation` rows in `.GCC/law-enforcer-trace.jsonl`
+5. Added `opencontext law guide`
+   - Regenerates `AGENT_GUIDE.txt` from current project law settings
+6. Auto-generation on:
+   - `opencontext init`
+   - `opencontext law init`
+   - `opencontext setup-opencode` (project mode with `.GCC`)
+
 ## Enforcement Contract
 - The watchman can interrupt after an assistant response if policy was violated.
 - Correction prompt text is AI-generated when critic is available.
@@ -52,6 +73,10 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
 Primary file:
 - `.GCC/law-enforcer.json`
 - Format: standard JSON config (opencode-style) for easier editing and tooling.
+
+Companion files:
+- `.GCC/law-policy.txt` (editable plain-text policy for watchman)
+- `.GCC/AGENT_GUIDE.txt` (agent-readable setup/customization handbook)
 
 Trace file:
 - `.GCC/law-enforcer-trace.jsonl`

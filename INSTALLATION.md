@@ -66,6 +66,8 @@ With `--local`, these are also created in your project:
 /path/to/project/.opencode/plugins/opencontext-reminder.js
 /path/to/project/.opencode/skills/opencontext/SKILL.md
 /path/to/project/.GCC/law-enforcer.json   # if .GCC already exists
+/path/to/project/.GCC/law-policy.txt      # if .GCC already exists
+/path/to/project/.GCC/AGENT_GUIDE.txt     # generated guide for agents
 ```
 
 ### Plugin Loading Note
@@ -136,6 +138,7 @@ The plugin will automatically:
 opencontext law init
 opencontext law validate
 opencontext law status
+opencontext law guide
 ```
 
 Configure watchman API key for model-based law inspection:
@@ -172,6 +175,13 @@ Watchman trace logs are written to:
 
 ```bash
 .GCC/law-enforcer-trace.jsonl
+```
+
+Agent-facing handbook and editable policy live in:
+
+```bash
+.GCC/AGENT_GUIDE.txt
+.GCC/law-policy.txt
 ```
 
 ## Setup Commands

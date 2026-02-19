@@ -1,0 +1,9 @@
+OpenContext Agent Guide Template
+This file is generated per project by:
+- opencontext init
+- opencontext law init
+- opencontext law guide
+- opencontext setup-opencode (project mode)
+
+If you see this template directly, regenerate project guide:
+opencontext law guide

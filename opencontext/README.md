@@ -152,6 +152,8 @@ ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 
 # Check law policy (after opencontext init + opencontext law init)
 ls -la .GCC/law-enforcer.json
+ls -la .GCC/law-policy.txt
+ls -la .GCC/AGENT_GUIDE.txt
 ```
 
 ### Plugin Development and Debugging
@@ -180,6 +182,12 @@ node ./scripts/test-opencode-plugin-provider-config.mjs
 
 # Run planning guard test (prevents checkpoint interruption during plan agent)
 node ./scripts/test-opencode-plugin-planning-guard.mjs
+
+# Run custom-rule soft->hard escalation test
+node ./scripts/test-opencode-plugin-custom-rules.mjs
+
+# Validate law asset generation from CLI (law json + policy + agent guide)
+./scripts/test-opencontext-law-assets.sh
 
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
@@ -230,6 +238,7 @@ The plugin automatically loads and will continuously enforce GCC discipline.
 opencontext law init
 opencontext law validate
 opencontext law status
+opencontext law guide
 ```
 
 Configure critic/watchman provider (OpenAI-compatible):
@@ -271,6 +280,19 @@ Watchman request/response traces are persisted to:
 ```bash
 .GCC/law-enforcer-trace.jsonl
 ```
+
+Agent customization files:
+
+```bash
+.GCC/law-policy.txt
+.GCC/AGENT_GUIDE.txt
+```
+
+Custom workflow rules (no plugin code edits needed):
+- Edit `.GCC/law-enforcer.json` -> `custom.rules`
+- Edit `.GCC/law-enforcer.json` -> `custom.escalation`
+- Edit `.GCC/law-policy.txt` for natural-language laws
+- Rebuild guide after major changes: `opencontext law guide`
 
 ### 3. Day-to-Day Workflow with OpenCode
 
@@ -319,6 +341,7 @@ tail -n 50 .GCC/law-enforcer-trace.jsonl
 - This is controlled by:
   - `gcc.skipCheckpointDuringPlanningAgent`
   - `watchman.skipDuringPlanningAgent`
+  - `custom.exemptAgentPatterns`
 
 7) Verify install quickly:
 
@@ -646,42 +669,9 @@ user_sessions:
 
 ## Configuration
 
-### Global Config
-`~/.config/opencontext/config.yaml`:
-
-```yaml
-defaults:
-  auto_git_commit: true
-  reminder_frequency: 5
-  context_warning_threshold: 80
-  tui:
-    theme: dark
-    refresh_rate: 1s
-
-reminders:
-  on_compaction: true
-  on_tool_milestones: true
-  on_context_usage: true
-  on_session_idle: true
-```
-
-### Project Config
-`.GCC/config.yaml`:
-
-```yaml
-project:
-  name: "MyProject"
-  goal: "Build a web scraper"
-  
-git:
-  auto_commit: true
-  commit_prefix: "[GCC]"
-  
-metadata:
-  auto_track_dependencies: true
-  auto_track_file_structure: true
-  track_performance: true
-```
+### OpenCode Runtime Config
+`~/.config/opencode/opencode.json` controls your OpenCode provider/MCP setup.
+The OpenContext plugin reads this runtime environment and project `.GCC` law files.
 
 ### Law Enforcer Policy (Primary)
 `.GCC/law-enforcer.json`:
@@ -713,9 +703,45 @@ metadata:
     "inspectCompaction": true,
     "inspectOnIdle": true,
     "skipDuringPlanningAgent": true
+  },
+  "custom": {
+    "policyFile": "law-policy.txt",
+    "escalation": {
+      "mode": "soft_then_hard",
+      "softViolationsBeforeInterrupt": 1,
+      "hardInterruptThreshold": 2
+    },
+    "rules": [
+      {
+        "id": "pty_required_for_dev_server",
+        "enabled": true,
+        "triggers": ["tool_call"],
+        "when": { "commandIncludes": ["npm run dev", "pnpm dev"] },
+        "require": {
+          "anyTools": ["pty_spawn"],
+          "guidance": "Use pty_spawn for long-running dev tasks."
+        },
+        "interruptAfterViolations": 2
+      }
+    ]
+  },
+  "agentGuide": {
+    "path": ".GCC/AGENT_GUIDE.txt",
+    "includeInWatchmanPayload": true
   }
 }
 ```
+
+Text policy + handbook files:
+- `.GCC/law-policy.txt` (natural-language workflow laws)
+- `.GCC/AGENT_GUIDE.txt` (full agent-readable setup/customization guide)
+
+Customizing without code changes:
+1. Edit `.GCC/law-policy.txt` to define plain-language laws.
+2. Edit `.GCC/law-enforcer.json` -> `custom.rules` for trigger-based checks.
+3. Edit `.GCC/law-enforcer.json` -> `custom.hints` to advertise preferred tools/skills/commands/MCPs.
+4. Edit `.GCC/law-enforcer.json` -> `custom.escalation` to tune soft reminder vs hard interruption.
+5. Run `opencontext law validate` and `opencontext law guide`.
 
 ## Examples
 
@@ -817,6 +843,9 @@ Malformed/non-JSON provider output is ignored by design and logged as parse fail
   },
   "watchman": {
     "skipDuringPlanningAgent": true
+  },
+  "custom": {
+    "exemptAgentPatterns": ["plan", "planner"]
   }
 }
 ```

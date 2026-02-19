@@ -47,3 +47,24 @@ watchman:
 observability:
   traceEnabled: true
   traceFile: law-enforcer-trace.jsonl
+
+custom:
+  enabled: true
+  policyFile: law-policy.txt
+  exemptAgentPatterns: [plan, planner]
+  escalation:
+    mode: soft_then_hard
+    softViolationsBeforeInterrupt: 1
+    hardInterruptThreshold: 2
+    reminderCooldownSeconds: 20
+    resetOnCommit: true
+  hints:
+    availableTools: []
+    availableSkills: []
+    preferredCommands: []
+    importantMcpServers: []
+  rules: []
+
+agentGuide:
+  path: .GCC/AGENT_GUIDE.txt
+  includeInWatchmanPayload: true

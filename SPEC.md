@@ -47,6 +47,10 @@ Blueprint docs for fast onboarding:
 ├── main.md                      # Global project roadmap
 ├── .current_branch             # Hidden file tracking active branch
 ├── evolution.yaml              # Project evolution & approach tracking
+├── law-enforcer.json           # Law Enforcer machine-readable policy
+├── law-policy.txt              # Editable natural-language law policy
+├── AGENT_GUIDE.txt             # Generated agent handbook
+├── law-enforcer-trace.jsonl    # Runtime watchman/violation evidence
 └── branches/
     ├── main/
     │   ├── commit.md           # Commit summaries with 3-block format
@@ -328,6 +332,15 @@ Delete branch (with confirmation):
 opencontext delete experiment-rag-memory
 ```
 
+#### `opencontext law init|validate|status|guide`
+Manage law config and agent docs:
+```bash
+opencontext law init
+opencontext law validate
+opencontext law status
+opencontext law guide
+```
+
 ### TUI Dashboard
 
 #### `opencontext tui`
@@ -363,6 +376,10 @@ opencontext tui [--theme dark|light]
 `.GCC/law-enforcer.json` (primary policy file)
 - JSON format mirrors normal config style used by OpenCode config files.
 
+Companion files:
+- `.GCC/law-policy.txt` (plain-text policy watched by critic/watchman)
+- `.GCC/AGENT_GUIDE.txt` (agent-readable setup + customization handbook)
+
 ### Watchman Trace File
 `.GCC/law-enforcer-trace.jsonl` (JSONL trace of watchman requests/responses and tool evidence)
 
@@ -384,6 +401,8 @@ On assistant completion, the plugin collects:
 - recent transcript window from session APIs
 - recent tool calls and outputs
 - policy/debt state (checkpoint overdue, failure lookup pending, research capture pending)
+- custom rule counters + custom hints
+- plain-text law policy and optional agent guide excerpt
 
 That evidence is sent to the configured critic/watchman model through OpenAI-compatible `chat/completions` using `response_format.type=json_schema`.
 Required watchman fields:
@@ -414,6 +433,8 @@ The law policy supports any OpenAI-compatible provider via `.GCC/law-enforcer.js
 - in-flight protection
 - deterministic fallback when model checks are unavailable
 - planning guard defaults (`gcc.skipCheckpointDuringPlanningAgent`, `watchman.skipDuringPlanningAgent`)
+- user-defined custom escalation (`custom.escalation`: soft_only, hard_only, soft_then_hard)
+- per-rule counters in session state (`custom.rules[*].interruptAfterViolations`)
 
 ---
 
@@ -584,44 +605,36 @@ opencontext context --log
 
 ## Configuration
 
-### Global Config
-`~/.config/opencontext/config.yaml`:
+### OpenCode Runtime Config
+`~/.config/opencode/opencode.json` controls OpenCode providers, MCP servers, and runtime options.
 
-```yaml
-defaults:
-  auto_git_commit: true
-  context_warning_threshold: 80
-  tui:
-    theme: dark
-    refresh_rate: 1s
+### Project Law Config
+Primary customization lives in project `.GCC/`:
 
-law_enforcer:
-  mode: interrupt_continue
-  watchman:
-    run_on_assistant_turn: true
-    include_recent_messages: 12
-    include_recent_tools: 20
-  cooldowns:
-    interruption_seconds: 45
-    same_rule_seconds: 120
-```
+- `.GCC/law-enforcer.json`: structured settings for deterministic checks, watchman provider, custom rules, and escalation.
+- `.GCC/law-policy.txt`: natural-language laws for watchman judgment.
+- `.GCC/AGENT_GUIDE.txt`: generated agent handbook for setup/customization commands.
 
-### Project Config
-`.GCC/config.yaml`:
+Example custom rule:
 
-```yaml
-project:
-  name: "MyProject"
-  goal: "Build a web scraper"
-  
-git:
-  auto_commit: true
-  commit_prefix: "[GCC]"
-  
-metadata:
-  auto_track_dependencies: true
-  auto_track_file_structure: true
-  track_performance: true
+```json
+{
+  "custom": {
+    "rules": [
+      {
+        "id": "pty_required_for_dev_server",
+        "enabled": true,
+        "triggers": ["tool_call", "assistant_turn"],
+        "when": { "commandIncludes": ["npm run dev", "pnpm dev"] },
+        "require": {
+          "anyTools": ["pty_spawn"],
+          "guidance": "Use pty_spawn for long-running dev tasks."
+        },
+        "interruptAfterViolations": 2
+      }
+    ]
+  }
+}
 ```
 
 ---

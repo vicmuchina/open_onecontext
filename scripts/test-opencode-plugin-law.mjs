@@ -118,6 +118,15 @@ try {
     }
   );
 
+  await hooks.event({
+    event: {
+      type: "session.idle",
+      properties: {
+        info: { id: "sess-law-1" },
+      },
+    },
+  });
+
   const violationLogFound = logEntries.some((entry) => entry?.message === "law.violation.detected");
   const injectionLogFound = logEntries.some((entry) => entry?.message === "law.interrupt.injected");
   const promptInjected = prompts.length > 0;

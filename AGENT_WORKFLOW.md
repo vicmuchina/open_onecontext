@@ -13,6 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/ins
 opencontext init --project-name "<name>" --goal "<goal>"
 opencontext law init
 opencontext law validate
+opencontext law guide
 ```
 
 3. Set provider key env (default):
@@ -70,6 +71,10 @@ Edit `.GCC/law-enforcer.json`:
 - Provider endpoint/model/auth (`critic.*`)
 - Strict retry count (`critic.strictJsonRetryAttempts`)
 - Planning guards (`gcc.skipCheckpointDuringPlanningAgent`, `watchman.skipDuringPlanningAgent`)
+- Custom rules (`custom.rules`) and escalation (`custom.escalation`)
+
+Edit `.GCC/law-policy.txt` for natural-language laws watched continuously by the enforcer model.
+Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.
 
 ## Recovery If Installer Fails
 Use:
@@ -85,6 +90,8 @@ node scripts/test-opencode-plugin-trace.mjs
 node scripts/test-opencode-plugin-watchman-malformed.mjs
 node scripts/test-opencode-plugin-provider-config.mjs
 node scripts/test-opencode-plugin-planning-guard.mjs
+node scripts/test-opencode-plugin-custom-rules.mjs
+./scripts/test-opencontext-law-assets.sh
 RUN_TIMEOUT_SECONDS=90 ./scripts/test-opencode-plugin.sh
 ./scripts/test-opencode-serve-plugin.sh
 CHUTES_API_KEY=<key> ./scripts/test-opencode-watchman-trace-live.sh

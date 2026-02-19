@@ -169,6 +169,27 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
         else
             echo -e "${BLUE}ℹ️  Law file already exists: ${PROJECT_GCC_DIR}/law-enforcer.json${NC}"
         fi
+        if [[ ! -f "${PROJECT_GCC_DIR}/law-policy.txt" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-policy.txt" \
+               "${PROJECT_GCC_DIR}/law-policy.txt"
+            echo -e "${GREEN}✓ Policy file initialized: ${PROJECT_GCC_DIR}/law-policy.txt${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Policy file already exists: ${PROJECT_GCC_DIR}/law-policy.txt${NC}"
+        fi
+        if command -v opencontext &> /dev/null; then
+            (
+                cd "${PROJECT_DIR}"
+                opencontext law init >/dev/null 2>&1 || true
+                opencontext law guide >/dev/null 2>&1 || true
+            )
+            if [[ -f "${PROJECT_GCC_DIR}/AGENT_GUIDE.txt" ]]; then
+                echo -e "${GREEN}✓ Agent guide generated: ${PROJECT_GCC_DIR}/AGENT_GUIDE.txt${NC}"
+            fi
+        elif [[ ! -f "${PROJECT_GCC_DIR}/AGENT_GUIDE.txt" ]]; then
+            cp "${INSTALL_DIR}/opencontext/opencontext/plugin/AGENT_GUIDE.txt" \
+               "${PROJECT_GCC_DIR}/AGENT_GUIDE.txt"
+            echo -e "${YELLOW}ℹ️  Added AGENT_GUIDE template. Run 'opencontext law guide' after PATH update.${NC}"
+        fi
     else
         echo -e "${YELLOW}ℹ️  .GCC not found in project. After 'opencontext init', run 'opencontext law init'.${NC}"
     fi
@@ -188,6 +209,10 @@ mkdir -p "${HOME}/.local/share/opencontext/templates"
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/opencontext-reminder.js" \
    "${HOME}/.local/share/opencontext/templates/"
 cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-enforcer.json" \
+   "${HOME}/.local/share/opencontext/templates/"
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/law-policy.txt" \
+   "${HOME}/.local/share/opencontext/templates/"
+cp "${INSTALL_DIR}/opencontext/opencontext/plugin/AGENT_GUIDE.txt" \
    "${HOME}/.local/share/opencontext/templates/"
 
 echo -e "${GREEN}✓ Templates created${NC}"

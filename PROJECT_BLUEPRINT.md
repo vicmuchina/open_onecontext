@@ -29,13 +29,23 @@ OpenContext is a Git-like context controller (GCC) for long-horizon LLM coding w
 3. Law Config (`.GCC/law-enforcer.json`)
 - Runtime policy and provider settings.
 - Controls enforcement cadence, cooldowns, and retry strictness.
+- Contains `custom.rules` and `custom.escalation` for user-defined workflow laws.
 
-4. Trace Log (`.GCC/law-enforcer-trace.jsonl`)
+4. Text Policy (`.GCC/law-policy.txt`)
+- Natural-language law instructions consumed by watchman on every inspection.
+- Easy to edit by users/agents without changing plugin code.
+
+5. Agent Handbook (`.GCC/AGENT_GUIDE.txt`)
+- Generated plain-text guide for coding agents.
+- Documents all configurable parameters and day-to-day workflow commands.
+
+6. Trace Log (`.GCC/law-enforcer-trace.jsonl`)
 - Verifiable request/response evidence.
 - Includes tool-call evidence and watchman verdicts.
 
 ## Operating Contract
 - Deterministic checks enforce high-priority rules (GCC init, checkpoint debt, compaction debt, failure lookup, research capture).
+- Deterministic custom rules can be declared in JSON (`custom.rules`) without hardcoding.
 - Watchman model evaluates recent messages + tool calls for policy drift.
 - Watchman/critic output must be structured JSON (schema-constrained).
 - If model output is malformed, plugin retries in strict JSON-only mode (`strictJsonRetryAttempts`) before skipping enforcement.

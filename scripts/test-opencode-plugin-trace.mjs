@@ -61,6 +61,11 @@ writeFileSync(
   }),
   "utf-8"
 );
+writeFileSync(
+  join(gccDir, "law-policy.txt"),
+  "Always use MCP tools when relevant and checkpoint research findings.\n",
+  "utf-8"
+);
 
 const client = {
   app: {
@@ -196,6 +201,10 @@ try {
     requestTrace &&
     Array.isArray(requestTrace.evidence?.recentToolCalls) &&
     requestTrace.evidence.recentToolCalls.length > 0;
+  const requestHasPolicyText =
+    requestTrace &&
+    typeof requestTrace.evidence?.lawPolicyText === "string" &&
+    requestTrace.evidence.lawPolicyText.includes("Always use MCP tools");
 
   if (!hasToolTrace) {
     console.error("FAIL  tool trace entry missing");
@@ -211,6 +220,10 @@ try {
   }
   if (!requestHasToolEvidence) {
     console.error("FAIL  watchman request trace missing recent tool evidence");
+    process.exit(1);
+  }
+  if (!requestHasPolicyText) {
+    console.error("FAIL  watchman request trace missing policy text evidence");
     process.exit(1);
   }
 

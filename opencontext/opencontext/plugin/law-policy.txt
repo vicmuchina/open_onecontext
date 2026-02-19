@@ -1,0 +1,20 @@
+OpenContext Law Policy (editable)
+
+Purpose
+- This text policy is passed to the watchman model with session evidence.
+- Keep rules explicit, short, and testable.
+
+Authoring Rules
+- Describe trigger + required behavior + expected tools/commands.
+- Mention concrete tool/skill names when needed.
+- Keep one rule per line or short numbered block.
+
+Example Rules
+1) For long-running terminal tasks (dev/watch/repl), use PTY/background tooling instead of blocking bash.
+2) If relevant MCP tooling exists for docs/research, use MCP first.
+3) When docs/GitHub research changes implementation, checkpoint with opencontext commit.
+4) Before retrying after failures, inspect prior attempts with opencontext context --search/--log.
+
+Notes
+- Structured trigger logic belongs in .GCC/law-enforcer.json under custom.rules.
+- This file is for natural-language policy and can be edited anytime.

@@ -48,6 +48,7 @@ cd /path/to/project
 opencontext init --project-name "<name>" --goal "<goal>"
 opencontext law init
 opencontext law validate
+opencontext law guide
 
 6) Configure model provider (OpenAI-compatible)
 
@@ -63,6 +64,16 @@ opencontext law validate
   export CHUTES_API_KEY="<key>"
   # or whichever env name matches critic.apiKeyEnv
 
+7) Customize behavior (no plugin edits)
+
+- Edit `.GCC/law-policy.txt` for plain-language laws.
+- Edit `.GCC/law-enforcer.json`:
+  - `custom.rules` for trigger-based checks.
+  - `custom.escalation` for soft vs hard enforcement.
+  - `custom.hints` for preferred tools/skills/commands/MCP servers.
+- Rebuild handbook:
+  opencontext law guide
+
 7) Verify end-to-end
 
 opencontext --version
@@ -74,6 +85,8 @@ node ~/.local/share/opencontext/scripts/test-opencode-plugin-trace.mjs
 node ~/.local/share/opencontext/scripts/test-opencode-plugin-watchman-malformed.mjs
 node ~/.local/share/opencontext/scripts/test-opencode-plugin-provider-config.mjs
 node ~/.local/share/opencontext/scripts/test-opencode-plugin-planning-guard.mjs
+node ~/.local/share/opencontext/scripts/test-opencode-plugin-custom-rules.mjs
+~/.local/share/opencontext/scripts/test-opencontext-law-assets.sh
 
 # live server integration test
 CHUTES_API_KEY="<key>" ~/.local/share/opencontext/scripts/test-opencode-watchman-trace-live.sh

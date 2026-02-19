@@ -15,11 +15,14 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 2. `experimental.chat.system.transform`
 - Injects OpenContext law contract into system prompt.
 - Adds GCC branch/last commit summary when available.
+- Injects custom policy text and tool/skill hints from `.GCC/law-policy.txt` + `custom.hints`.
 
 3. `tool.execute.after`
 - Records tool and output in recent evidence.
 - Updates checkpoint/failure/research debt.
 - Runs deterministic violation checks.
+- Evaluates user-defined `custom.rules` against tool/command/output context.
+- Applies per-rule escalation (soft reminder first, then hard interruption).
 - Optionally runs watchman check.
 
 4. `message.updated` (assistant completion)
@@ -40,7 +43,9 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 - Recent transcript window
 - Recent tool-call records
 - Debt state (checkpoint/research/failure/mcp indicators)
+- Custom rule counters
 - Law summary
+- Plain-text policy (`.GCC/law-policy.txt`) and optional agent guide excerpt
 
 ## Structured Output Requirements
 Watchman must return:
@@ -70,12 +75,14 @@ Critic must return:
 To avoid nuisance interruptions during planning:
 - `gcc.skipCheckpointDuringPlanningAgent`
 - `watchman.skipDuringPlanningAgent`
+- `custom.exemptAgentPatterns`
 
 ## Debugging Artifacts
 - Runtime logs: OpenCode `--print-logs --log-level DEBUG`
 - Trace file: `.GCC/law-enforcer-trace.jsonl`
 - Key trace events:
   - `tool.execute.after`
+  - `law.custom.violation`
   - `watchman.request`
   - `watchman.response`
   - `law.interrupt.request`
