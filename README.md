@@ -2,6 +2,26 @@
 
 This repository contains the OpenContext system (GCC memory workflow) plus the OpenCode Law Enforcer plugin that actively inspects agent behavior and interrupts when workflow laws are violated.
 
+## Start Here (Don’t Panic)
+
+If you want fast setup without reading everything:
+
+1. Install in one command:
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+```
+2. In your project, initialize:
+```bash
+opencontext init --project-name "<name>" --goal-file SPEC.md
+opencontext law init
+opencontext law doctor
+```
+3. For AI-assisted configuration, point your assistant to:
+- `.GCC/AGENT_GUIDE.txt` (primary setup/customization guide)
+- then `.GCC/law-enforcer.json` + `.GCC/law-policy.txt` for your custom behavior
+
+After this, use `opencode` normally. The law enforcer runs in the background.
+
 ## Documentation Map
 
 - `README.md` - repo entry point and quick navigation.

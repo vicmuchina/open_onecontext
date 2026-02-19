@@ -7,6 +7,25 @@ Git Context Controller (GCC) for OpenCode - Version control for LLM agent contex
 
 > **Based on:** "Git Context Controller: Manage the Context of LLM-based Agents like Git" (arXiv:2508.00031)
 
+## Start Here (Quick Path)
+
+If you just want this working with minimal reading:
+
+1. Install:
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
+```
+2. In your project:
+```bash
+opencontext init --project-name "<name>" --goal-file SPEC.md
+opencontext law init
+opencontext law doctor
+```
+3. To let an AI assistant configure everything for you, tell it to read:
+- `.GCC/AGENT_GUIDE.txt` (main operator guide)
+- `.GCC/law-enforcer.json` (switches/thresholds)
+- `.GCC/law-policy.txt` (plain-language rules)
+
 ## Overview
 
 OpenContext elevates LLM agent context from passive token streams to a navigable, versioned memory hierarchy. Inspired by Git, it provides explicit operations for managing agent memory across long-horizon workflows.
