@@ -28,11 +28,11 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 - Runs deterministic violation checks.
 - Evaluates user-defined `custom.rules` against tool/command/output context.
 - Applies per-rule escalation (soft reminder first, then hard interruption).
-- Optionally runs watchman check.
+- Runs watchman check by default (`watchman.inspectToolCalls=true`), configurable.
 
 4. `message.updated` (assistant completion)
 - Captures assistant identity/model.
-- Runs watchman inspection on completed assistant turns.
+- Runs watchman inspection on completed assistant turns by default (`watchman.inspectAssistantTurns=true`).
 
 5. `session.idle`
 - Safety pass when session becomes idle.

@@ -40,6 +40,10 @@ opencode serve --hostname 127.0.0.1 --port 4096 --print-logs --log-level DEBUG
 
 ## During Work
 - Follow law-enforcer prompts when interruptions occur.
+- Watchman check frequency (default):
+  - every tool call (`tool.execute.after`)
+  - every completed assistant output (`message.updated`)
+  - idle/compaction safety passes (`session.idle`, `session.compacted`)
 - Commit progress regularly:
 ```bash
 opencontext commit "<summary>"

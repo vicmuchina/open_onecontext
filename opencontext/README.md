@@ -636,11 +636,12 @@ When OpenCode compacts context:
 Law Enforcer injects continuation prompt requiring checkpoint.
 ```
 
-### 3. Context Usage Stats
-```
-📊 Context: 85% full
-💡 Consider: opencontext commit '<summary>'
-```
+### 3. Research + Failure Debt Enforcement
+- Research capture debt is opened by model judgment when external research should be checkpointed.
+- Failure lookup debt is opened by model judgment when retries should consult prior attempts first.
+- Both are configurable with:
+  - `.GCC/law-research-policy.txt`
+  - `.GCC/law-failure-policy.txt`
 
 ### 4. Auto-Discovery on Session Start
 When starting a new session in a GCC project:
@@ -683,23 +684,16 @@ The OpenCode plugin hooks into OpenCode's event system:
 
 3. **Tool Execution** (`tool.execute.after`)
    - Tracks every tool execution
-   - Detects law violations in real time
-   - Injects corrective continuation prompt when needed
+   - Updates debt state and deterministic/custom rule checks
+   - Runs watchman inspection on tool activity when `watchman.inspectToolCalls=true` (default)
    - Tracks research/failure/MCP workflow debts
 
 4. **Message Updated** (`message.updated`)
-   - Monitors context usage
-   - Warns at 80% threshold
-   - Suggests commit before compaction
+   - Triggered when assistant output completes
+   - Runs watchman inspection on completed assistant turns (`watchman.inspectAssistantTurns=true`)
 
 5. **Session Idle** (`session.idle`)
-   - Detects when session ends
-   - Counts unlogged actions
-   - Suggests final commit
-
-6. **Session Completed** (`session.completed`)
-   - Shows summary notification
-   - Reminds to commit if actions were performed
+   - Optional safety inspection pass (`watchman.inspectOnIdle=true`)
 
 ### Watchman Response Contract
 - Provider API: OpenAI-compatible `POST /chat/completions`
