@@ -18,6 +18,22 @@ Repository blueprint docs (root):
 - `../HOOKS_AND_ENFORCEMENT.md`
 - `../AGENT_WORKFLOW.md`
 
+## Have You Been Experiencing This?
+
+If yes, this system is built for exactly that:
+- You give clear instructions at session start, then the agent drifts later.
+- It ignores available tools/skills/MCPs until you manually remind it.
+- It brute-forces instead of consulting docs or similar repos first.
+- After compaction, it forgets key workflow rules and repeats mistakes.
+- You spend time babysitting instead of building.
+
+What OpenContext + Law Enforcer changes:
+- Continuous supervision, not one-time prompt injection.
+- Automatic workflow interruptions when guard rails are violated.
+- Checkpoint discipline so important breakthroughs are captured.
+- Failure-retry guard so prior attempts are reviewed before retry loops.
+- Trace logs so you can verify what the enforcer saw and decided.
+
 ## Features
 
 🎯 **Core GCC Operations**
@@ -32,6 +48,8 @@ Repository blueprint docs (root):
 - Per-assistant-turn watchman inspection using session transcript + tool traces
 - In-session interruption prompts on workflow violations (AI-generated correction prompt)
 - Strict JSON-schema watchman/critic parsing (no free-text fallback interruption)
+- Model-judged failure lookup classification (actionable failure vs setup/CLI noise)
+- Optional model-only failure classification mode (`gcc.failureClassifierRequireModelDecision`)
 - OpenAI-compatible provider configuration (Chutes or any compatible endpoint)
 - Context compaction checkpoint enforcement
 - Session handoff support
@@ -299,6 +317,13 @@ Notes:
 - The plugin always sends `response_format: { type: "json_schema", ... }`.
 - If provider output is malformed, it retries in stricter JSON-only mode (`critic.strictJsonRetryAttempts`) before skipping enforcement.
 - Deterministic law checks remain active even when model output is malformed, so enforcement does not collapse.
+
+Decision model (plain terms):
+- Failure retry gating is model-judged first (via the failure policy prompt in `.GCC/law-failure-policy.txt`).
+- Lightweight pattern checks are only a trigger/fallback safety net.
+- If you want model-only judgment (no fallback decisions), set:
+  - `gcc.failureClassifierRequireModelDecision: true`
+- Repeated interruption suppression is state-based dedupe (not regex), to prevent spam loops on the same unresolved violation.
 
 Watchman request/response traces are persisted to:
 
@@ -743,6 +768,7 @@ Example `law-runtime.json`:
     "failureLookupPolicyFile": "law-failure-policy.txt",
     "failureClassifierEnabled": true,
     "failureClassifierMinConfidence": 0.55,
+    "failureClassifierRequireModelDecision": false,
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false
   },

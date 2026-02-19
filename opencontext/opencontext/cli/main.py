@@ -818,6 +818,10 @@ def _validate_law_content(law: Dict) -> List[str]:
             errors.append("gcc.failureLookupPolicyFile must be a string.")
         if "failureClassifierEnabled" in gcc and not isinstance(gcc.get("failureClassifierEnabled"), bool):
             errors.append("gcc.failureClassifierEnabled must be true or false.")
+        if "failureClassifierRequireModelDecision" in gcc and not isinstance(
+            gcc.get("failureClassifierRequireModelDecision"), bool
+        ):
+            errors.append("gcc.failureClassifierRequireModelDecision must be true or false.")
         if "failureClassifierMinConfidence" in gcc:
             value = gcc.get("failureClassifierMinConfidence")
             if not isinstance(value, (int, float)) or value < 0 or value > 1:
@@ -1008,6 +1012,7 @@ def law_status(law_path_opt: Optional[Path]):
     failure_policy_file = law_data.get("gcc", {}).get("failureLookupPolicyFile", LAW_FAILURE_POLICY_FILENAME)
     failure_classifier_enabled = law_data.get("gcc", {}).get("failureClassifierEnabled", "unknown")
     failure_classifier_conf = law_data.get("gcc", {}).get("failureClassifierMinConfidence", "unknown")
+    failure_classifier_model_only = law_data.get("gcc", {}).get("failureClassifierRequireModelDecision", "unknown")
     critic_enabled = law_data.get("critic", {}).get("enabled", "unknown")
     critic_model = law_data.get("critic", {}).get("model", "unknown")
     critic_base = law_data.get("critic", {}).get("baseUrl", "unknown")
@@ -1034,6 +1039,7 @@ def law_status(law_path_opt: Optional[Path]):
         f"Skip checkpoint during planning: {planning_skip}\n"
         f"Failure classifier enabled: {failure_classifier_enabled}\n"
         f"Failure classifier min confidence: {failure_classifier_conf}\n"
+        f"Failure classifier require model decision: {failure_classifier_model_only}\n"
         f"Critic enabled: {critic_enabled}\n"
         f"Critic model: {critic_model}\n"
         f"Critic endpoint: {critic_base}{critic_path}\n"

@@ -84,6 +84,8 @@ Edit `.GCC/law-enforcer.json`:
 Edit `.GCC/law-policy.txt` for natural-language laws watched continuously by the enforcer model.
 Edit `.GCC/law-watchman-system.txt` to customize watchman system behavior and strictness.
 Edit `.GCC/law-failure-policy.txt` to customize actionable-failure classification.
+If you want model-only failure classification (no fallback decisions), set
+`gcc.failureClassifierRequireModelDecision: true` in `.GCC/law-enforcer.json`.
 Edit `.GCC/law-runtime.json` for project-local API key/model overrides.
 Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.
 

@@ -15,6 +15,7 @@
     "failureLookupPolicyFile": "law-failure-policy.txt",
     "failureClassifierEnabled": true,
     "failureClassifierMinConfidence": 0.55,
+    "failureClassifierRequireModelDecision": false,
     "compactionCheckpointRequired": true,
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false

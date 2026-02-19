@@ -46,6 +46,7 @@ const DEFAULT_LAW = {
     failureLookupPolicyFile: "law-failure-policy.txt",
     failureClassifierEnabled: true,
     failureClassifierMinConfidence: 0.55,
+    failureClassifierRequireModelDecision: false,
     compactionCheckpointRequired: true,
     skipCheckpointDuringPlanningAgent: true,
     countReadOnlyToolsForCheckpoint: false,
@@ -495,6 +496,8 @@ function sanitizeLaw(law) {
       )
     )
   );
+  sanitized.gcc.failureClassifierRequireModelDecision =
+    sanitized.gcc.failureClassifierRequireModelDecision === true;
   if (!sanitized.critic.provider || typeof sanitized.critic.provider !== "string") {
     sanitized.critic.provider = "openai_compatible";
   }
@@ -1434,6 +1437,7 @@ function buildLawSummaryForInspector(law) {
       failureLookupPolicyFile: law.gcc.failureLookupPolicyFile,
       failureClassifierEnabled: law.gcc.failureClassifierEnabled,
       failureClassifierMinConfidence: law.gcc.failureClassifierMinConfidence,
+      failureClassifierRequireModelDecision: law.gcc.failureClassifierRequireModelDecision,
       compactionCheckpointRequired: law.gcc.compactionCheckpointRequired,
       skipCheckpointDuringPlanningAgent: law.gcc.skipCheckpointDuringPlanningAgent,
       countReadOnlyToolsForCheckpoint: law.gcc.countReadOnlyToolsForCheckpoint,
@@ -3144,7 +3148,11 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       if (law.gcc.requireFailedAttemptLookup) {
         const failureSignal = detectFailureSignal(tool, toolOutput, commandText);
         if (failureSignal.detected) {
-          let requireLookup = shouldRequireFailureLookupFallback(failureSignal, commandText);
+          const fallbackRequireLookup = shouldRequireFailureLookupFallback(
+            failureSignal,
+            commandText
+          );
+          let requireLookup = fallbackRequireLookup;
           let classifierVerdict = null;
           if (law.gcc.failureClassifierEnabled) {
             classifierVerdict = await runFailureLookupClassifier(client, law, {
@@ -3161,7 +3169,11 @@ export const OpenContextPlugin = async ({ client, directory }) => {
             });
             if (classifierVerdict.available) {
               requireLookup = classifierVerdict.requireLookup === true;
+            } else if (law.gcc.failureClassifierRequireModelDecision) {
+              requireLookup = false;
             }
+          } else if (law.gcc.failureClassifierRequireModelDecision) {
+            requireLookup = false;
           }
           await appendLawTrace(client, directory, law, {
             type: "failure.lookup.classifier",
@@ -3177,8 +3189,10 @@ export const OpenContextPlugin = async ({ client, directory }) => {
             classifier: classifierVerdict || {
               available: false,
               source: "fallback_only",
+              fallbackRequireLookup,
               requireLookup,
             },
+            fallbackRequireLookup,
             requireLookup,
           });
           if (requireLookup) {
