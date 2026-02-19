@@ -73,10 +73,17 @@ opencontext law guide
 7) Customize behavior (no plugin edits)
 
 - Edit `.GCC/law-policy.txt` for plain-language laws.
+- Edit `.GCC/law-watchman-system.txt` to tune interruption strictness and confidence behavior.
+- Edit `.GCC/law-failure-policy.txt` to tune actionable-failure vs noise judgment.
+- Edit `.GCC/law-research-policy.txt` to tune when research must be checkpointed.
 - Edit `.GCC/law-enforcer.json`:
   - `custom.rules` for trigger-based checks.
   - `custom.escalation` for soft vs hard enforcement.
   - `custom.hints` for preferred tools/skills/commands/MCP servers.
+  - Model-only switches:
+    - `gcc.failureClassifierRequireModelDecision`
+    - `research.captureClassifierRequireModelDecision`
+    - `watchman.requireModelDecision`
 - Rebuild handbook:
   opencontext law guide
 

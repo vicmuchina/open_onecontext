@@ -12,7 +12,7 @@ gcc:
   failureLookupPolicyFile: law-failure-policy.txt
   failureClassifierEnabled: true
   failureClassifierMinConfidence: 0.55
-  failureClassifierRequireModelDecision: false
+  failureClassifierRequireModelDecision: true
   compactionCheckpointRequired: true
   skipCheckpointDuringPlanningAgent: true
   countReadOnlyToolsForCheckpoint: false
@@ -22,6 +22,10 @@ mcp:
   usageReminderEveryTools: 4
 research:
   requireCaptureOnDocsOrGithub: true
+  capturePolicyFile: law-research-policy.txt
+  captureClassifierEnabled: true
+  captureClassifierMinConfidence: 0.55
+  captureClassifierRequireModelDecision: true
   docsKeywords: [docs, readme, documentation, arxiv.org]
 critic:
   enabled: true
@@ -47,6 +51,8 @@ watchman:
   inspectOnIdle: true
   skipDuringPlanningAgent: true
   dedupeSameViolationUntilResolved: true
+  minConfidence: 0.65
+  requireModelDecision: true
   systemPromptFile: law-watchman-system.txt
   includeRecentMessages: 12
   includeRecentToolCalls: 12

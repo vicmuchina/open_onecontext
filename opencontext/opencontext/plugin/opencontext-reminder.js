@@ -18,6 +18,7 @@ const CONFIG = {
   lawPolicyFileName: "law-policy.txt",
   watchmanSystemPromptFileName: "law-watchman-system.txt",
   failurePolicyFileName: "law-failure-policy.txt",
+  researchPolicyFileName: "law-research-policy.txt",
   agentGuideFileName: "AGENT_GUIDE.txt",
   runtimeConfigFileName: "law-runtime.json",
   traceFileName: "law-enforcer-trace.jsonl",
@@ -46,7 +47,7 @@ const DEFAULT_LAW = {
     failureLookupPolicyFile: "law-failure-policy.txt",
     failureClassifierEnabled: true,
     failureClassifierMinConfidence: 0.55,
-    failureClassifierRequireModelDecision: false,
+    failureClassifierRequireModelDecision: true,
     compactionCheckpointRequired: true,
     skipCheckpointDuringPlanningAgent: true,
     countReadOnlyToolsForCheckpoint: false,
@@ -58,6 +59,10 @@ const DEFAULT_LAW = {
   },
   research: {
     requireCaptureOnDocsOrGithub: true,
+    capturePolicyFile: "law-research-policy.txt",
+    captureClassifierEnabled: true,
+    captureClassifierMinConfidence: 0.55,
+    captureClassifierRequireModelDecision: true,
     docsKeywords: ["docs", "readme", "documentation", "arxiv.org"],
   },
   critic: {
@@ -85,6 +90,8 @@ const DEFAULT_LAW = {
     inspectOnIdle: true,
     skipDuringPlanningAgent: true,
     dedupeSameViolationUntilResolved: true,
+    minConfidence: 0.65,
+    requireModelDecision: true,
     systemPromptFile: "law-watchman-system.txt",
     includeRecentMessages: 12,
     includeRecentToolCalls: 12,
@@ -175,6 +182,17 @@ const FAILURE_LOOKUP_RESPONSE_SCHEMA = {
   required: ["require_lookup", "reason", "confidence"],
   properties: {
     require_lookup: { type: "boolean" },
+    reason: { type: "string" },
+    confidence: { type: "number" },
+  },
+};
+
+const RESEARCH_CAPTURE_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["require_capture", "reason", "confidence"],
+  properties: {
+    require_capture: { type: "boolean" },
     reason: { type: "string" },
     confidence: { type: "number" },
   },
@@ -285,6 +303,116 @@ function parseBranchFromStatus(statusText) {
 function parseLastCommitFromStatus(statusText) {
   const match = statusText.match(/Last commit:\s+(.+)/);
   return match ? match[1].trim() : "none";
+}
+
+function readUtf8Safe(path) {
+  try {
+    if (!existsSync(path)) return "";
+    return readFileSync(path, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+function readTailLinesSafe(path, maxLines = 120, maxChars = 4000) {
+  const raw = readUtf8Safe(path);
+  if (!raw) return "";
+  const lines = raw.split("\n");
+  const tail = lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
+  return clipText(tail, maxChars);
+}
+
+function tokenizeSemantic(text) {
+  return Array.from(
+    new Set(
+      String(text || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_\- ]+/g, " ")
+        .split(/\s+/)
+        .filter((part) => part.length >= 4)
+    )
+  );
+}
+
+function scoreSemanticOverlap(queryTokens, candidateText) {
+  if (!Array.isArray(queryTokens) || queryTokens.length === 0) return 0;
+  const corpus = ` ${toLowerSafe(candidateText)} `;
+  let hits = 0;
+  for (const token of queryTokens) {
+    if (token && corpus.includes(` ${token} `)) hits += 1;
+  }
+  return hits / queryTokens.length;
+}
+
+function findSemanticHistoryMatches(queryText, blocks, limit = 5) {
+  const queryTokens = tokenizeSemantic(queryText).slice(0, 28);
+  if (queryTokens.length === 0) return [];
+  const rows = [];
+  for (const block of blocks) {
+    const text = String(block?.text || "");
+    if (!text) continue;
+    const pieces = text
+      .split(/\n{2,}/)
+      .map((piece) => piece.trim())
+      .filter(Boolean)
+      .slice(-80);
+    for (const piece of pieces) {
+      const score = scoreSemanticOverlap(queryTokens, piece);
+      if (score < 0.14) continue;
+      rows.push({
+        source: block.source,
+        score,
+        snippet: clipText(piece, 450),
+      });
+    }
+  }
+  rows.sort((a, b) => b.score - a.score);
+  const deduped = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const key = `${row.source}::${row.snippet}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+    if (deduped.length >= limit) break;
+  }
+  return deduped;
+}
+
+function collectGccHistoryEvidence(directory, queryText = "") {
+  const gccDir = join(directory, CONFIG.gccDir);
+  if (!existsSync(gccDir)) {
+    return {
+      available: false,
+      reason: "gcc_not_initialized",
+      currentBranch: "",
+      files: {},
+      semanticMatches: [],
+    };
+  }
+
+  const currentBranchRaw = readUtf8Safe(join(gccDir, ".current_branch")).trim();
+  const currentBranch = currentBranchRaw || "main";
+  const branchDir = join(gccDir, "branches", currentBranch);
+  const files = {
+    main: readTailLinesSafe(join(gccDir, "main.md"), 120, 5000),
+    commit: readTailLinesSafe(join(branchDir, "commit.md"), 220, 9000),
+    log: readTailLinesSafe(join(branchDir, "log.md"), 220, 9000),
+    metadata: readTailLinesSafe(join(branchDir, "metadata.yaml"), 120, 4500),
+  };
+  const blocks = [
+    { source: `${CONFIG.gccDir}/main.md`, text: files.main },
+    { source: `${CONFIG.gccDir}/branches/${currentBranch}/commit.md`, text: files.commit },
+    { source: `${CONFIG.gccDir}/branches/${currentBranch}/log.md`, text: files.log },
+    { source: `${CONFIG.gccDir}/branches/${currentBranch}/metadata.yaml`, text: files.metadata },
+  ];
+  const semanticMatches = findSemanticHistoryMatches(queryText, blocks, 5);
+  return {
+    available: true,
+    currentBranch,
+    files,
+    semanticMatches,
+  };
 }
 
 function toToolName(toolLike) {
@@ -497,7 +625,7 @@ function sanitizeLaw(law) {
     )
   );
   sanitized.gcc.failureClassifierRequireModelDecision =
-    sanitized.gcc.failureClassifierRequireModelDecision === true;
+    sanitized.gcc.failureClassifierRequireModelDecision !== false;
   if (!sanitized.critic.provider || typeof sanitized.critic.provider !== "string") {
     sanitized.critic.provider = "openai_compatible";
   }
@@ -555,6 +683,12 @@ function sanitizeLaw(law) {
   sanitized.watchman.skipDuringPlanningAgent = sanitized.watchman.skipDuringPlanningAgent !== false;
   sanitized.watchman.dedupeSameViolationUntilResolved =
     sanitized.watchman.dedupeSameViolationUntilResolved !== false;
+  sanitized.watchman.minConfidence = Math.max(
+    0,
+    Math.min(1, Number(sanitized.watchman.minConfidence ?? DEFAULT_LAW.watchman.minConfidence))
+  );
+  sanitized.watchman.requireModelDecision =
+    sanitized.watchman.requireModelDecision !== false;
   sanitized.watchman.systemPromptFile =
     typeof sanitized.watchman.systemPromptFile === "string" &&
     sanitized.watchman.systemPromptFile.trim()
@@ -581,6 +715,25 @@ function sanitizeLaw(law) {
   if (!Array.isArray(sanitized.research.docsKeywords)) {
     sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
   }
+  sanitized.research.capturePolicyFile =
+    typeof sanitized.research.capturePolicyFile === "string" &&
+    sanitized.research.capturePolicyFile.trim()
+      ? sanitized.research.capturePolicyFile.trim()
+      : CONFIG.researchPolicyFileName;
+  sanitized.research.captureClassifierEnabled =
+    sanitized.research.captureClassifierEnabled !== false;
+  sanitized.research.captureClassifierMinConfidence = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.research.captureClassifierMinConfidence
+          ?? DEFAULT_LAW.research.captureClassifierMinConfidence
+      )
+    )
+  );
+  sanitized.research.captureClassifierRequireModelDecision =
+    sanitized.research.captureClassifierRequireModelDecision !== false;
   sanitized.custom = sanitized.custom && typeof sanitized.custom === "object"
     ? sanitized.custom
     : {};
@@ -823,6 +976,16 @@ function defaultFailureLookupPolicyPrompt() {
   ].join("\n");
 }
 
+function defaultResearchCapturePolicyPrompt() {
+  return [
+    "You classify whether recent activity should open OpenContext research-capture debt.",
+    "Return STRICT JSON with fields: require_capture (bool), reason (string), confidence (number).",
+    "Set require_capture=true when docs/specs/papers/GitHub/similar-project research produced implementation-relevant insight that should be checkpointed.",
+    "Set require_capture=false when activity is routine/local exploration with no external research insight worth preserving.",
+    "Use trajectory and history evidence: if this resembles a previously solved hurdle, lean true so the agent captures it.",
+  ].join("\n");
+}
+
 async function loadOpenContextCliCapabilities(client, directory) {
   if (
     cliCapabilitiesCache.data &&
@@ -888,6 +1051,13 @@ function getFailureLookupPolicyPath(directory, law) {
     law?.gcc?.failureLookupPolicyFile || CONFIG.failurePolicyFileName
   ).trim();
   return join(directory, CONFIG.gccDir, configured || CONFIG.failurePolicyFileName);
+}
+
+function getResearchCapturePolicyPath(directory, law) {
+  const configured = String(
+    law?.research?.capturePolicyFile || CONFIG.researchPolicyFileName
+  ).trim();
+  return join(directory, CONFIG.gccDir, configured || CONFIG.researchPolicyFileName);
 }
 
 function getAgentGuidePath(directory, law) {
@@ -984,6 +1154,22 @@ async function loadLaw(client, directory) {
     } catch (error) {
       await log(client, "warn", "law.failure_policy_load_failed", {
         failurePolicyPath,
+        error: error?.message ?? String(error),
+      });
+    }
+  }
+  const researchPolicyPath = getResearchCapturePolicyPath(directory, law);
+  law.research.capturePolicyPath = researchPolicyPath;
+  law.research.capturePolicyText = defaultResearchCapturePolicyPrompt();
+  if (existsSync(researchPolicyPath)) {
+    try {
+      const customResearchPolicy = readFileSync(researchPolicyPath, "utf-8");
+      if (customResearchPolicy && customResearchPolicy.trim()) {
+        law.research.capturePolicyText = clipText(customResearchPolicy, 12000);
+      }
+    } catch (error) {
+      await log(client, "warn", "law.research_policy_load_failed", {
+        researchPolicyPath,
         error: error?.message ?? String(error),
       });
     }
@@ -1134,6 +1320,26 @@ function detectResearchSignal(tool, args, toolOutput, law) {
   };
 }
 
+function shouldEvaluateResearchCapture(tool, commandText, args, toolOutput, researchSignal) {
+  if (researchSignal) return true;
+  if (isMcpTool(tool)) return true;
+  const toolName = toLowerSafe(tool);
+  if (
+    toolName.includes("search") ||
+    toolName.includes("fetch") ||
+    toolName.includes("crawl") ||
+    toolName.includes("extract") ||
+    toolName.includes("context7") ||
+    toolName.includes("research")
+  ) {
+    return true;
+  }
+  const argBlob = safeJsonString(args);
+  const outputBlob = safeJsonString(toolOutput);
+  const combined = `${commandText}\n${argBlob}\n${outputBlob}`;
+  return extractUrls(combined).length > 0;
+}
+
 function detectFailureSignal(tool, output, commandText = "") {
   const toolName = toLowerSafe(tool);
   if (toolName.includes("read")) return { detected: false, category: "read_only" };
@@ -1222,6 +1428,34 @@ function detectFailureSignal(tool, output, commandText = "") {
     reason: "Unclassified failure-like output.",
     excerpt: clipText(blob, 500),
   };
+}
+
+function shouldEvaluateFailureLookup(tool, commandText, toolOutput) {
+  const toolName = toLowerSafe(tool);
+  if (toolName.includes("read")) return false;
+  if (toolName === "unknown") return false;
+  const outputText = safeJsonString(toolOutput);
+  const command = toLowerSafe(commandText);
+  if (!outputText.trim() && !command.trim()) return false;
+  if (toolName.includes("bash") || toolName.includes("shell")) {
+    if (isLikelyReadOnlyBashCommand(commandText)) return false;
+    return true;
+  }
+  if (
+    toolName.includes("test") ||
+    toolName.includes("build") ||
+    toolName.includes("edit") ||
+    toolName.includes("write")
+  ) {
+    return true;
+  }
+  const text = toLowerSafe(outputText);
+  return (
+    text.includes("error") ||
+    text.includes("failed") ||
+    text.includes("exception") ||
+    text.includes("traceback")
+  );
 }
 
 function shouldRequireFailureLookupFallback(signal, commandText = "") {
@@ -1397,7 +1631,7 @@ async function getSessionMessages(client, sessionId) {
   }
 }
 
-async function collectWatchmanEvidence(client, law, state) {
+async function collectWatchmanEvidence(client, law, state, directory) {
   const sessionId = state?.sessionId || activeSessionId;
   const messages = await getSessionMessages(client, sessionId);
   const recent = messages.slice(-law.watchman.includeRecentMessages);
@@ -1411,11 +1645,18 @@ async function collectWatchmanEvidence(client, law, state) {
   }
 
   const recentToolCalls = state.recentToolExecutions.slice(-law.watchman.includeRecentToolCalls);
+  const historyQuery = buildHistoryQueryFromState(state, [
+    latestAssistant?.text || "",
+    recentToolCalls.map((entry) => entry?.commandText || "").join("\n"),
+    recentToolCalls.map((entry) => entry?.output || "").join("\n"),
+  ]);
+  const gccHistory = collectGccHistoryEvidence(directory, historyQuery);
   return {
     sessionId,
     recentMessages: summarized,
     latestAssistant,
     recentToolCalls,
+    gccHistory,
     debts: {
       pendingCompactionCheckpoint: state.pendingCompactionCheckpoint,
       pendingResearchCapture: state.pendingResearchCapture,
@@ -1443,7 +1684,14 @@ function buildLawSummaryForInspector(law) {
       countReadOnlyToolsForCheckpoint: law.gcc.countReadOnlyToolsForCheckpoint,
     },
     mcp: law.mcp,
-    research: law.research,
+    research: {
+      requireCaptureOnDocsOrGithub: law.research.requireCaptureOnDocsOrGithub,
+      docsKeywords: law.research.docsKeywords,
+      capturePolicyFile: law.research.capturePolicyFile,
+      captureClassifierEnabled: law.research.captureClassifierEnabled,
+      captureClassifierMinConfidence: law.research.captureClassifierMinConfidence,
+      captureClassifierRequireModelDecision: law.research.captureClassifierRequireModelDecision,
+    },
     custom: {
       enabled: law.custom.enabled,
       escalation: law.custom.escalation,
@@ -1468,6 +1716,8 @@ function buildLawSummaryForInspector(law) {
       inspectOnIdle: law.watchman.inspectOnIdle,
       skipDuringPlanningAgent: law.watchman.skipDuringPlanningAgent,
       dedupeSameViolationUntilResolved: law.watchman.dedupeSameViolationUntilResolved,
+      minConfidence: law.watchman.minConfidence,
+      requireModelDecision: law.watchman.requireModelDecision,
       systemPromptFile: law.watchman.systemPromptFile,
     },
     cliCapabilities: law.cliCapabilities || {},
@@ -1521,6 +1771,18 @@ function collectRecentCommandTexts(state) {
     .slice(-12)
     .map((entry) => String(entry?.commandText || "").trim())
     .filter(Boolean);
+}
+
+function buildHistoryQueryFromState(state, extras = []) {
+  const parts = [];
+  if (state?.lastAssistantText) parts.push(String(state.lastAssistantText));
+  const commands = collectRecentCommandTexts(state).slice(-4);
+  if (commands.length > 0) parts.push(commands.join("\n"));
+  for (const extra of extras) {
+    const text = String(extra || "").trim();
+    if (text) parts.push(text);
+  }
+  return clipText(parts.join("\n\n"), 3000);
 }
 
 function shouldInspectCustomRuleForTrigger(rule, trigger) {
@@ -1984,6 +2246,15 @@ function isValidFailureLookupParsed(parsed) {
   );
 }
 
+function isValidResearchCaptureParsed(parsed) {
+  return (
+    parsed &&
+    typeof parsed === "object" &&
+    typeof parsed.require_capture === "boolean" &&
+    typeof parsed.reason === "string"
+  );
+}
+
 async function requestStructuredVerdict({
   law,
   apiKey,
@@ -2221,6 +2492,84 @@ async function runFailureLookupClassifier(client, law, payload) {
       available: false,
       requireLookup: false,
       source: "failure_classifier_error",
+      error: error?.message ?? String(error),
+      model,
+      apiKeyEnv: sourceEnv,
+    };
+  }
+}
+
+async function runResearchCaptureClassifier(client, law, payload) {
+  if (!law?.research?.captureClassifierEnabled) {
+    return { available: false, requireCapture: false, source: "classifier_disabled" };
+  }
+  if (!law?.critic?.enabled) {
+    return { available: false, requireCapture: false, source: "critic_disabled" };
+  }
+
+  const { apiKey, sourceEnv } = resolveCriticApiKey(law);
+  if (!apiKey) {
+    return { available: false, requireCapture: false, source: "no_api_key" };
+  }
+  const model = resolveCriticModel(law);
+
+  try {
+    const result = await requestStructuredVerdict({
+      law,
+      apiKey,
+      model,
+      timeoutMs: law.critic.timeoutMs || 8000,
+      schemaName: "opencontext_research_capture",
+      schema: RESEARCH_CAPTURE_RESPONSE_SCHEMA,
+      maxTokens: Math.min(
+        320,
+        Math.max(64, Number(law.critic.maxTokensCritic || 120))
+      ),
+      messages: [
+        {
+          role: "system",
+          content:
+            law?.research?.capturePolicyText || defaultResearchCapturePolicyPrompt(),
+        },
+        {
+          role: "user",
+          content: JSON.stringify(payload),
+        },
+      ],
+      isValidParsed: isValidResearchCaptureParsed,
+    });
+    if (!result.ok) {
+      return {
+        available: false,
+        requireCapture: false,
+        source: result.source || "http_error",
+        status: result.status,
+        error: result.raw,
+        attempts: result.attempts || 1,
+        model,
+        apiKeyEnv: sourceEnv,
+      };
+    }
+    const parsed = result.parsed;
+    const confidence = Number(parsed?.confidence ?? 0);
+    const minConfidence = Number(law?.research?.captureClassifierMinConfidence ?? 0.55);
+    const requireCapture = parsed?.require_capture === true && confidence >= minConfidence;
+    return {
+      available: true,
+      requireCapture,
+      source: "research_classifier_model",
+      reason: clipText(parsed?.reason || "", 300),
+      confidence: Number.isFinite(confidence) ? confidence : 0,
+      threshold: minConfidence,
+      model,
+      apiKeyEnv: sourceEnv,
+      attempts: result.attempts || 1,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      requireCapture: false,
+      source: "research_classifier_error",
       error: error?.message ?? String(error),
       model,
       apiKeyEnv: sourceEnv,
@@ -2617,8 +2966,6 @@ async function evaluateAndEnforce({
       rule: violations[0].rule,
       trigger,
     });
-    const injected = await maybeInterrupt(client, directory, law, state, violations[0]);
-    if (injected) return true;
   }
 
   const customViolations = evaluateCustomRules({
@@ -2651,6 +2998,14 @@ async function evaluateAndEnforce({
     if (interrupted) return true;
   }
 
+  const hardInvariantRules = new Set([
+    "gcc_init_required",
+    "compaction_checkpoint_required",
+  ]);
+  const pickFallbackViolation = (allowPolicyFallback) =>
+    violations.find((item) => hardInvariantRules.has(item.rule)) ||
+    (allowPolicyFallback ? violations[0] : null);
+
   const shouldRunWatchman =
     law.watchman.enabled &&
     ((trigger === "assistant_turn" && law.watchman.inspectAssistantTurns) ||
@@ -2660,6 +3015,13 @@ async function evaluateAndEnforce({
     !(law.watchman.skipDuringPlanningAgent && isPlanningAgentName(state?.lastAgent, law));
 
   if (!shouldRunWatchman || state.inspectorInFlight) {
+    const allowPolicyFallback =
+      !law?.watchman?.enabled || !law?.watchman?.requireModelDecision;
+    const fallbackViolation = pickFallbackViolation(allowPolicyFallback);
+    if (fallbackViolation) {
+      const injected = await maybeInterrupt(client, directory, law, state, fallbackViolation);
+      if (injected) return true;
+    }
     if (!violationDetected) {
       state.consecutiveInjections = 0;
     }
@@ -2668,9 +3030,15 @@ async function evaluateAndEnforce({
 
   state.inspectorInFlight = true;
   try {
-    const evidence = await collectWatchmanEvidence(client, law, state);
+    const evidence = await collectWatchmanEvidence(client, law, state, directory);
     const latestAssistant = evidence.latestAssistant;
-    if (!latestAssistant) return false;
+    if (!latestAssistant) {
+      const fallbackViolation = pickFallbackViolation(!law?.watchman?.requireModelDecision);
+      if (fallbackViolation) {
+        return await maybeInterrupt(client, directory, law, state, fallbackViolation);
+      }
+      return false;
+    }
 
     if (assistantMessageId && latestAssistant.id && assistantMessageId !== latestAssistant.id) {
       return false;
@@ -2689,12 +3057,19 @@ async function evaluateAndEnforce({
       lawPolicyText: law?.custom?.policyText || "",
       watchmanSystemPromptText: law?.watchman?.systemPromptText || "",
       failureLookupPolicyText: law?.gcc?.failureLookupPolicyText || "",
+      researchCapturePolicyText: law?.research?.capturePolicyText || "",
       agentGuideText: law?.agentGuide?.includeInWatchmanPayload ? law?.agentGuide?.text || "" : "",
       latestAssistant,
       recentMessages: evidence.recentMessages,
       recentToolCalls: evidence.recentToolCalls,
+      gccHistory: evidence.gccHistory,
       debts: evidence.debts,
       customRuleCounters: state.customRuleViolations,
+      deterministicCandidates: violations.map((violation) => ({
+        rule: violation.rule,
+        detail: violation.detail,
+        commands: violation.commands || [],
+      })),
     };
     await appendLawTrace(client, directory, law, {
       type: "watchman.request",
@@ -2705,11 +3080,16 @@ async function evaluateAndEnforce({
         latestAssistant,
         recentMessages: evidence.recentMessages,
         recentToolCalls: evidence.recentToolCalls,
+        gccHistory: {
+          currentBranch: evidence?.gccHistory?.currentBranch || "",
+          semanticMatches: (evidence?.gccHistory?.semanticMatches || []).slice(0, 3),
+        },
         debts: evidence.debts,
         customRuleCounters: state.customRuleViolations,
         lawPolicyText: clipText(law?.custom?.policyText || "", 1200),
         watchmanSystemPromptText: clipText(law?.watchman?.systemPromptText || "", 1000),
         failureLookupPolicyText: clipText(law?.gcc?.failureLookupPolicyText || "", 800),
+        researchCapturePolicyText: clipText(law?.research?.capturePolicyText || "", 800),
       },
     });
 
@@ -2737,15 +3117,40 @@ async function evaluateAndEnforce({
       attempts: verdict.attempts || 1,
     });
 
-    if (!verdict.available || !verdict.violation) {
+    const minConfidence = Number(law?.watchman?.minConfidence ?? 0.65);
+    const confidence = Number(verdict?.confidence ?? 0);
+    const modelViolation =
+      verdict.available &&
+      verdict.violation === true &&
+      Number.isFinite(confidence) &&
+      confidence >= minConfidence;
+
+    if (!modelViolation) {
       if (latestAssistant.id) {
         state.lastInspectedAssistantMessageId = latestAssistant.id;
       }
-      clearRuleDebt(state, "watchman_policy_violation");
-      for (const key of Object.keys(state.ruleDebtOpen || {})) {
-        if (String(key).startsWith("watchman_")) {
-          clearRuleDebt(state, key);
+      if (verdict.available && !verdict.violation) {
+        clearRuleDebt(state, "watchman_policy_violation");
+        for (const key of Object.keys(state.ruleDebtOpen || {})) {
+          if (String(key).startsWith("watchman_")) {
+            clearRuleDebt(state, key);
+          }
         }
+      }
+      if (verdict.available && verdict.violation && confidence < minConfidence) {
+        await log(client, "info", "law.watchman.low_confidence_skip", {
+          sessionId: state.sessionId,
+          trigger,
+          confidence,
+          minConfidence,
+          rule: verdict.rule || "",
+        });
+      }
+      const allowPolicyFallback = !verdict.available && !law?.watchman?.requireModelDecision;
+      const fallbackViolation = pickFallbackViolation(allowPolicyFallback);
+      if (fallbackViolation) {
+        const injected = await maybeInterrupt(client, directory, law, state, fallbackViolation);
+        if (injected) return true;
       }
       if (!violationDetected) {
         state.consecutiveInjections = 0;
@@ -2762,7 +3167,9 @@ async function evaluateAndEnforce({
 
     const injected = await maybeInterrupt(client, directory, law, state, {
       rule: verdict.rule || "watchman_policy_violation",
-      detail: verdict.reason || "Law Enforcer detected a policy violation.",
+      detail:
+        verdict.reason ||
+        "Law Enforcer detected a policy violation.",
       commands: [],
       useCritic: false,
       promptText: correctionPrompt,
@@ -3123,6 +3530,13 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         clearRuleDebt(state, "gcc_init_required");
       }
 
+      const historyQuery = buildHistoryQueryFromState(state, [
+        commandText,
+        safeJsonString(args),
+        safeJsonString(toolOutput),
+      ]);
+      const gccHistory = collectGccHistoryEvidence(directory, historyQuery);
+
       const researchSignal = detectResearchSignal(tool, args, toolOutput, law);
       if (researchSignal) {
         await log(client, "info", "research source detected", {
@@ -3130,14 +3544,69 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           sourceType: researchSignal.sourceType,
           urls: researchSignal.urls,
         });
-        if (law.research.requireCaptureOnDocsOrGithub) {
+      }
+      if (
+        law.research.requireCaptureOnDocsOrGithub &&
+        shouldEvaluateResearchCapture(tool, commandText, args, toolOutput, researchSignal)
+      ) {
+        let classifierVerdict = null;
+        const fallbackRequireCapture = Boolean(researchSignal);
+        let requireCapture = fallbackRequireCapture;
+        if (law.research.captureClassifierEnabled) {
+          classifierVerdict = await runResearchCaptureClassifier(client, law, {
+            tool,
+            commandText: clipText(commandText, 900),
+            toolArgs: clipText(safeJsonString(args), 900),
+            toolOutput: clipText(safeJsonString(toolOutput), 900),
+            signal: researchSignal || {
+              sourceType: "unknown",
+              urls: extractUrls(`${commandText}\n${safeJsonString(args)}\n${safeJsonString(toolOutput)}`).slice(0, 5),
+            },
+            policyText: law?.research?.capturePolicyText || "",
+            debts: {
+              pendingResearchCapture: state.pendingResearchCapture,
+              sinceCommitCount: state.sinceCommitCount,
+            },
+            gccHistory,
+          });
+          if (classifierVerdict.available) {
+            requireCapture = classifierVerdict.requireCapture === true;
+          } else if (law.research.captureClassifierRequireModelDecision) {
+            requireCapture = false;
+          }
+        } else if (law.research.captureClassifierRequireModelDecision) {
+          requireCapture = false;
+        }
+        await appendLawTrace(client, directory, law, {
+          type: "research.capture.classifier",
+          sessionId: state.sessionId,
+          tool: {
+            name: tool,
+            commandText: clipText(commandText),
+          },
+          signal: researchSignal || { sourceType: "unknown", urls: [] },
+          classifier: classifierVerdict || {
+            available: false,
+            source: "fallback_only",
+            fallbackRequireCapture,
+            requireCapture,
+          },
+          fallbackRequireCapture,
+          requireCapture,
+          gccHistory: {
+            currentBranch: gccHistory?.currentBranch || "",
+            semanticMatches: (gccHistory?.semanticMatches || []).slice(0, 3),
+          },
+        });
+        if (requireCapture) {
           state.pendingResearchCapture = true;
+          state.hasViolationDebt = true;
           const now = Date.now();
           if (now - state.lastResearchReminderTime >= CONFIG.researchReminderCooldownMs) {
             state.lastResearchReminderTime = now;
-            const firstUrl = researchSignal.urls[0] || "";
+            const firstUrl = researchSignal?.urls?.[0] || "";
             await toast(client, {
-              message: `🔎 Research signal (${researchSignal.sourceType}) detected${firstUrl ? `: ${firstUrl}` : ""}\nCapture with:\nopencontext commit "Research findings on <topic>"`,
+              message: `🔎 Research capture required${firstUrl ? `: ${firstUrl}` : ""}\nCheckpoint with:\nopencontext commit "Research findings on <topic>"`,
               type: "info",
               timeout: 10000,
             });
@@ -3145,60 +3614,68 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         }
       }
 
-      if (law.gcc.requireFailedAttemptLookup) {
+      if (
+        law.gcc.requireFailedAttemptLookup &&
+        shouldEvaluateFailureLookup(tool, commandText, toolOutput)
+      ) {
         const failureSignal = detectFailureSignal(tool, toolOutput, commandText);
-        if (failureSignal.detected) {
-          const fallbackRequireLookup = shouldRequireFailureLookupFallback(
-            failureSignal,
-            commandText
-          );
-          let requireLookup = fallbackRequireLookup;
-          let classifierVerdict = null;
-          if (law.gcc.failureClassifierEnabled) {
-            classifierVerdict = await runFailureLookupClassifier(client, law, {
-              tool,
-              commandText: clipText(commandText, 800),
-              toolOutput: failureSignal.excerpt || clipText(safeJsonString(toolOutput), 800),
-              failureCategory: failureSignal.category,
-              failureReason: failureSignal.reason || "",
-              policyText: law?.gcc?.failureLookupPolicyText || "",
-              debts: {
-                pendingFailureLookup: state.pendingFailureLookup,
-                sinceCommitCount: state.sinceCommitCount,
-              },
-            });
-            if (classifierVerdict.available) {
-              requireLookup = classifierVerdict.requireLookup === true;
-            } else if (law.gcc.failureClassifierRequireModelDecision) {
-              requireLookup = false;
-            }
+        const fallbackRequireLookup = shouldRequireFailureLookupFallback(
+          failureSignal,
+          commandText
+        );
+        let requireLookup = fallbackRequireLookup;
+        let classifierVerdict = null;
+        if (law.gcc.failureClassifierEnabled) {
+          classifierVerdict = await runFailureLookupClassifier(client, law, {
+            tool,
+            commandText: clipText(commandText, 900),
+            toolOutput: failureSignal.excerpt || clipText(safeJsonString(toolOutput), 900),
+            failureDetectedBySignal: Boolean(failureSignal.detected),
+            failureCategory: failureSignal.category || "none",
+            failureReason: failureSignal.reason || "",
+            policyText: law?.gcc?.failureLookupPolicyText || "",
+            debts: {
+              pendingFailureLookup: state.pendingFailureLookup,
+              sinceCommitCount: state.sinceCommitCount,
+            },
+            gccHistory,
+          });
+          if (classifierVerdict.available) {
+            requireLookup = classifierVerdict.requireLookup === true;
           } else if (law.gcc.failureClassifierRequireModelDecision) {
             requireLookup = false;
           }
-          await appendLawTrace(client, directory, law, {
-            type: "failure.lookup.classifier",
-            sessionId: state.sessionId,
-            tool: {
-              name: tool,
-              commandText: clipText(commandText),
-            },
-            signal: {
-              category: failureSignal.category,
-              reason: failureSignal.reason || "",
-            },
-            classifier: classifierVerdict || {
-              available: false,
-              source: "fallback_only",
-              fallbackRequireLookup,
-              requireLookup,
-            },
+        } else if (law.gcc.failureClassifierRequireModelDecision) {
+          requireLookup = false;
+        }
+        await appendLawTrace(client, directory, law, {
+          type: "failure.lookup.classifier",
+          sessionId: state.sessionId,
+          tool: {
+            name: tool,
+            commandText: clipText(commandText),
+          },
+          signal: {
+            detected: Boolean(failureSignal.detected),
+            category: failureSignal.category || "none",
+            reason: failureSignal.reason || "",
+          },
+          classifier: classifierVerdict || {
+            available: false,
+            source: "fallback_only",
             fallbackRequireLookup,
             requireLookup,
-          });
-          if (requireLookup) {
-            state.pendingFailureLookup = true;
-            state.hasViolationDebt = true;
-          }
+          },
+          fallbackRequireLookup,
+          requireLookup,
+          gccHistory: {
+            currentBranch: gccHistory?.currentBranch || "",
+            semanticMatches: (gccHistory?.semanticMatches || []).slice(0, 3),
+          },
+        });
+        if (requireLookup) {
+          state.pendingFailureLookup = true;
+          state.hasViolationDebt = true;
         }
       }
 

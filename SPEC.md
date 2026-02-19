@@ -15,6 +15,60 @@ Blueprint docs for fast onboarding:
 
 ---
 
+## In-Progress Upgrade (Decision-Locked)
+
+### Model-Judged Debt/Interruption Engine (vNext)
+
+This upgrade is now the intended architecture and should be preserved in future sessions:
+
+1. Research debt, failure debt, and interruption decisions are model-judged first.
+2. Judgment must include trajectory evidence + OpenContext history evidence.
+3. Deterministic pattern checks are reduced to trigger/fallback signals, not primary judgment.
+4. Interruption is confidence-gated.
+5. Same unresolved violation is deduped to avoid interruption loops.
+
+### Locked Behavioral Decisions
+
+- Model availability mode: strict model-only for policy judgment (no deterministic hard interrupt on model parse/unavailable paths).
+- Lookup scope: recent-first plus semantic history retrieval.
+- Interruption threshold: high-confidence only.
+
+### Required Policy Inputs
+
+In `.GCC/`:
+
+- `law-policy.txt` for high-level workflow policy.
+- `law-watchman-system.txt` for watchman system behavior.
+- `law-failure-policy.txt` for failure/actionable vs noise judgment.
+- `law-research-policy.txt` for research debt judgment semantics.
+
+### Required Evidence in Model Payload
+
+- Latest assistant intent/output.
+- Recent session transcript + tool calls.
+- Current debt/open-rule state.
+- Recent GCC commits/logs/metadata summaries.
+- Semantic matches to prior solved/similar hurdles.
+
+### Completion Criteria for this Upgrade
+
+- Research debt is set/cleared by model judgment, not simple keyword matching.
+- Failure debt is set/cleared by model judgment (with configurable model-only gate).
+- Interruption decision uses model output + confidence threshold.
+- Trace logs record request, verdict, confidence, evidence subset, and reason.
+
+### Continuation Checkpoint (2026-02-19)
+
+- Implemented in this iteration:
+  - model-judged research debt via `law-research-policy.txt`
+  - semantic GCC history evidence in classifier/watchman payloads
+  - confidence-gated watchman interruption with model-decision gate
+- Remaining follow-up:
+  - tune confidence thresholds/policies from live usage trace data
+  - extend semantic retrieval scoring if future repos need deeper history matching
+
+---
+
 ## Architecture
 
 ### Three-Layer Design
@@ -51,6 +105,7 @@ Blueprint docs for fast onboarding:
 ├── law-policy.txt              # Editable natural-language law policy
 ├── law-watchman-system.txt     # Editable watchman system prompt
 ├── law-failure-policy.txt      # Editable failure-lookup classifier policy
+├── law-research-policy.txt     # Editable research-capture classifier policy
 ├── law-runtime.json            # Optional provider key/model overrides
 ├── AGENT_GUIDE.txt             # Generated agent handbook
 ├── law-enforcer-trace.jsonl    # Runtime watchman/violation evidence

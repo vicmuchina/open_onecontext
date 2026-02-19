@@ -68,6 +68,9 @@ With `--local`, these are also created in your project:
 /path/to/project/.opencode/skills/opencontext/SKILL.md
 /path/to/project/.GCC/law-enforcer.json   # if .GCC already exists
 /path/to/project/.GCC/law-policy.txt      # if .GCC already exists
+/path/to/project/.GCC/law-watchman-system.txt
+/path/to/project/.GCC/law-failure-policy.txt
+/path/to/project/.GCC/law-research-policy.txt
 /path/to/project/.GCC/law-runtime.json    # provider key/model overrides (project-local)
 /path/to/project/.GCC/AGENT_GUIDE.txt     # generated guide for agents
 ```
@@ -192,6 +195,9 @@ Agent-facing handbook and editable policy live in:
 ```bash
 .GCC/AGENT_GUIDE.txt
 .GCC/law-policy.txt
+.GCC/law-watchman-system.txt
+.GCC/law-failure-policy.txt
+.GCC/law-research-policy.txt
 ```
 
 ## Setup Commands

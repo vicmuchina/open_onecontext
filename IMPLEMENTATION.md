@@ -8,6 +8,63 @@ Companion docs:
 - `HOOKS_AND_ENFORCEMENT.md`
 - `AGENT_WORKFLOW.md`
 
+## Current Implementation Target (Active)
+
+This file now tracks the active upgrade work. If session is interrupted, continue from this section.
+
+### Upgrade Name
+Model-Judged Debt and Interruption (Research/Failure/Trajectory-Aware)
+
+### Why
+Deterministic debt triggers based on simple patterns are brittle in dynamic OpenCode sessions. The enforcer should reason from:
+
+- What the worker is currently trying to do
+- What has already been committed in OpenContext
+- What similar failures/solutions exist in prior traces
+
+### Locked Decisions
+
+1. Research debt judged by model (policy-driven), not simple regex/keyword matching.
+2. Failure debt judged by model (policy-driven), with model-only gate available.
+3. Interruption determined by model verdict + confidence threshold.
+4. Unresolved-rule dedupe retained to prevent interruption loops.
+5. History lookup strategy: recent-first, then semantic expansion.
+
+### Work Breakdown (Execution Order)
+
+1. Spec/docs update first (this file + SPEC.md) before code mutation.
+2. Add model-judged research debt path and policy file support.
+3. Expand history evidence collection (recent + semantic matches) for judge payload.
+4. Refactor interruption path to rely on model judge outputs and confidence gate.
+5. Keep deterministic signals as non-authoritative triggers only.
+6. Extend trace schema and `law doctor` checks for new policy/evidence fields.
+7. Add/adjust tests for:
+   - research debt semantic judgment
+   - failure debt model-only behavior
+   - confidence-gated interrupt behavior
+   - dedupe with new-evidence re-interrupt behavior
+
+### Done So Far (Already Implemented)
+
+- Watchman/failure policy prompt files introduced.
+- Failure classifier path added with configurable model-only option.
+- Unresolved-rule dedupe added for repeated interruptions.
+- `opencontext law doctor` added and wired.
+- Research classifier path added (`law-research-policy.txt`) with model-only option.
+- GCC history evidence (recent + semantic matches) added to classifier/watchman payloads.
+- Watchman interruption now uses confidence threshold + model-decision gating.
+- Law asset generation/doctor/guide now includes research policy file.
+
+### Remaining
+
+- Run live `opencode`/`opencode serve` smoke loops and tune policy prompts from trace evidence.
+- Expand optional semantic-history retrieval depth if required by larger repositories.
+
+### Continuation Checkpoint (2026-02-19)
+
+- Completed priorities 1-3 in this iteration.
+- Next session should focus on live enforcement tuning (confidence/prompt calibration), not architecture changes.
+
 ## Problem
 One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
 - GCC/OpenContext checkpoint discipline

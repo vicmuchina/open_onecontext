@@ -49,7 +49,9 @@ What OpenContext + Law Enforcer changes:
 - In-session interruption prompts on workflow violations (AI-generated correction prompt)
 - Strict JSON-schema watchman/critic parsing (no free-text fallback interruption)
 - Model-judged failure lookup classification (actionable failure vs setup/CLI noise)
-- Optional model-only failure classification mode (`gcc.failureClassifierRequireModelDecision`)
+- Model-judged research capture classification (checkpoint-worthy insight vs routine exploration)
+- Optional model-only gates (`gcc.failureClassifierRequireModelDecision`, `research.captureClassifierRequireModelDecision`, `watchman.requireModelDecision`)
+- Trajectory-aware watchman payload (includes GCC commit/log evidence + semantic similar-attempt matches)
 - OpenAI-compatible provider configuration (Chutes or any compatible endpoint)
 - Context compaction checkpoint enforcement
 - Session handoff support
@@ -173,6 +175,7 @@ ls -la .GCC/law-enforcer.json
 ls -la .GCC/law-policy.txt
 ls -la .GCC/law-watchman-system.txt
 ls -la .GCC/law-failure-policy.txt
+ls -la .GCC/law-research-policy.txt
 ls -la .GCC/AGENT_GUIDE.txt
 ```
 
@@ -316,13 +319,17 @@ Notes:
 - If your provider does not use `Authorization: Bearer`, change `authHeader` and `apiKeyPrefix`.
 - The plugin always sends `response_format: { type: "json_schema", ... }`.
 - If provider output is malformed, it retries in stricter JSON-only mode (`critic.strictJsonRetryAttempts`) before skipping enforcement.
-- Deterministic law checks remain active even when model output is malformed, so enforcement does not collapse.
+- Hard deterministic invariants remain active even when model output is malformed; policy-level checks can stay model-only based on your `*RequireModelDecision` settings.
 
 Decision model (plain terms):
 - Failure retry gating is model-judged first (via the failure policy prompt in `.GCC/law-failure-policy.txt`).
+- Research capture debt is model-judged first (via `.GCC/law-research-policy.txt`).
+- Watchman interruption is model-judged with confidence threshold (`watchman.minConfidence`) and optional model-only mode (`watchman.requireModelDecision`).
 - Lightweight pattern checks are only a trigger/fallback safety net.
 - If you want model-only judgment (no fallback decisions), set:
   - `gcc.failureClassifierRequireModelDecision: true`
+  - `research.captureClassifierRequireModelDecision: true`
+  - `watchman.requireModelDecision: true`
 - Repeated interruption suppression is state-based dedupe (not regex), to prevent spam loops on the same unresolved violation.
 
 Watchman request/response traces are persisted to:
@@ -337,6 +344,7 @@ Agent customization files:
 .GCC/law-policy.txt
 .GCC/law-watchman-system.txt
 .GCC/law-failure-policy.txt
+.GCC/law-research-policy.txt
 .GCC/AGENT_GUIDE.txt
 ```
 
@@ -346,6 +354,7 @@ Custom workflow rules (no plugin code edits needed):
 - Edit `.GCC/law-policy.txt` for natural-language laws
 - Edit `.GCC/law-watchman-system.txt` to customize watchman system behavior
 - Edit `.GCC/law-failure-policy.txt` to customize failure lookup classification
+- Edit `.GCC/law-research-policy.txt` to customize research capture classification
 - Rebuild guide after major changes: `opencontext law guide`
 
 ### 3. Day-to-Day Workflow with OpenCode
@@ -768,9 +777,16 @@ Example `law-runtime.json`:
     "failureLookupPolicyFile": "law-failure-policy.txt",
     "failureClassifierEnabled": true,
     "failureClassifierMinConfidence": 0.55,
-    "failureClassifierRequireModelDecision": false,
+    "failureClassifierRequireModelDecision": true,
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false
+  },
+  "research": {
+    "requireCaptureOnDocsOrGithub": true,
+    "capturePolicyFile": "law-research-policy.txt",
+    "captureClassifierEnabled": true,
+    "captureClassifierMinConfidence": 0.55,
+    "captureClassifierRequireModelDecision": true
   },
   "critic": {
     "provider": "openai_compatible",
@@ -793,6 +809,8 @@ Example `law-runtime.json`:
     "inspectOnIdle": true,
     "skipDuringPlanningAgent": true,
     "dedupeSameViolationUntilResolved": true,
+    "minConfidence": 0.65,
+    "requireModelDecision": true,
     "systemPromptFile": "law-watchman-system.txt"
   },
   "custom": {
@@ -827,6 +845,7 @@ Text policy + handbook files:
 - `.GCC/law-policy.txt` (natural-language workflow laws)
 - `.GCC/law-watchman-system.txt` (editable watchman system prompt)
 - `.GCC/law-failure-policy.txt` (editable failure-lookup classifier policy)
+- `.GCC/law-research-policy.txt` (editable research-capture classifier policy)
 - `.GCC/law-runtime.json` (project-level API key/model/provider overrides)
 - `.GCC/AGENT_GUIDE.txt` (full agent-readable setup/customization guide)
 
@@ -834,10 +853,11 @@ Customizing without code changes:
 1. Edit `.GCC/law-policy.txt` to define plain-language laws.
 2. Edit `.GCC/law-watchman-system.txt` to tune watchman judgment behavior.
 3. Edit `.GCC/law-failure-policy.txt` to control actionable-failure classification.
-4. Edit `.GCC/law-enforcer.json` -> `custom.rules` for trigger-based checks.
-5. Edit `.GCC/law-enforcer.json` -> `custom.hints` to advertise preferred tools/skills/commands/MCPs.
-6. Edit `.GCC/law-enforcer.json` -> `custom.escalation` to tune soft reminder vs hard interruption.
-7. Run `opencontext law validate`, `opencontext law doctor`, and `opencontext law guide`.
+4. Edit `.GCC/law-research-policy.txt` to control what research must be checkpointed.
+5. Edit `.GCC/law-enforcer.json` -> `custom.rules` for trigger-based checks.
+6. Edit `.GCC/law-enforcer.json` -> `custom.hints` to advertise preferred tools/skills/commands/MCPs.
+7. Edit `.GCC/law-enforcer.json` -> `custom.escalation` to tune soft reminder vs hard interruption.
+8. Run `opencontext law validate`, `opencontext law doctor`, and `opencontext law guide`.
 
 ## Examples
 

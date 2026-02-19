@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -10,6 +10,46 @@ const pluginFile = join(rootDir, "opencontext", "opencontext", "plugin", "openco
 
 const tempDir = mkdtempSync(join(tmpdir(), "ocx-plugin-research-"));
 mkdirSync(join(tempDir, ".GCC"), { recursive: true });
+writeFileSync(
+  join(tempDir, ".GCC", "law-enforcer.json"),
+  JSON.stringify({
+    version: 1,
+    mode: "interrupt_continue",
+    cooldowns: { interruptionSeconds: 5, sameRuleSeconds: 10 },
+    limits: { maxConsecutiveInjections: 3 },
+    gcc: {
+      requireInit: true,
+      requireCheckpointEveryTools: 99,
+      requireFailedAttemptLookup: false,
+      compactionCheckpointRequired: false,
+    },
+    mcp: {
+      requireAwarenessAtSessionStart: false,
+      requireUseWhenRelevant: false,
+      usageReminderEveryTools: 99,
+    },
+    research: {
+      requireCaptureOnDocsOrGithub: true,
+      captureClassifierEnabled: false,
+      captureClassifierRequireModelDecision: false,
+      docsKeywords: ["docs", "readme", "documentation", "arxiv.org"],
+    },
+    critic: {
+      enabled: false,
+      model: "openai/gpt-oss-120b-TEE",
+    },
+    watchman: {
+      enabled: false,
+      includeRecentMessages: 6,
+      includeRecentToolCalls: 6,
+    },
+    observability: {
+      traceEnabled: true,
+      traceFile: "law-enforcer-trace.jsonl",
+    },
+  }),
+  "utf-8"
+);
 
 const logEntries = [];
 const toasts = [];
@@ -45,7 +85,7 @@ try {
 
   const hasResearchLog = logEntries.some((entry) => entry?.message === "research source detected");
   const hasResearchToast = toasts.some((entry) =>
-    String(entry?.message || "").includes("Research signal")
+    String(entry?.message || "").includes("Research capture required")
   );
 
   if (!hasResearchLog) {

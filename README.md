@@ -13,6 +13,9 @@ This repository contains the OpenContext system (GCC memory workflow) plus the O
 - `IMPLEMENTATION.md` - implementation decisions, scope, and behavior guarantees.
 - `.GCC/AGENT_GUIDE.txt` - generated per-project plain-text handbook for coding agents (how to configure laws, prompts, providers, and escalation).
 - `.GCC/law-policy.txt` - editable natural-language law policy consumed by the watchman model.
+- `.GCC/law-watchman-system.txt` - editable watchman system prompt (how strict/when to interrupt).
+- `.GCC/law-failure-policy.txt` - editable failure-debt policy (actionable failure vs setup noise).
+- `.GCC/law-research-policy.txt` - editable research-debt policy (what external findings must be checkpointed).
 - `.GCC/law-runtime.json` - optional per-project provider key/model overrides (no repeated env export).
 - `opencontext/README.md` - full end-user guide for OpenContext CLI + plugin usage.
 - `opencontext/TEST_RESULTS.md` - recorded test runs and verification snapshots.
@@ -26,4 +29,4 @@ curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/ins
 ```
 
 Project objective in one line:
-- Keep long-running OpenCode work aligned with GCC memory discipline by enforcing checkpoints, failure lookups, MCP usage awareness, and research capture with a watchman model.
+- Keep long-running OpenCode work aligned with GCC memory discipline by enforcing checkpoints, model-judged failure/research debts, MCP usage awareness, and trajectory-aware watchman interruptions.

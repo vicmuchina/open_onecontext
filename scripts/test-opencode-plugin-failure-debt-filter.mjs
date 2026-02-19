@@ -24,6 +24,7 @@ writeFileSync(
       failureLookupPolicyFile: "law-failure-policy.txt",
       failureClassifierEnabled: false,
       failureClassifierMinConfidence: 0.55,
+      failureClassifierRequireModelDecision: false,
       compactionCheckpointRequired: false,
       skipCheckpointDuringPlanningAgent: true,
       countReadOnlyToolsForCheckpoint: false,
@@ -180,4 +181,3 @@ try {
   Date.now = oldNow;
   rmSync(tempDir, { recursive: true, force: true });
 }
-

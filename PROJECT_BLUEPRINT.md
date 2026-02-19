@@ -47,9 +47,10 @@ OpenContext is a Git-like context controller (GCC) for long-horizon LLM coding w
 - Includes tool-call evidence and watchman verdicts.
 
 ## Operating Contract
-- Deterministic checks enforce high-priority rules (GCC init, checkpoint debt, compaction debt, failure lookup, research capture).
+- Deterministic checks still enforce hard invariants (GCC init, compaction debt) and provide trigger/fallback signals.
+- Failure and research debt are model-judged first using dedicated policy files.
 - Deterministic custom rules can be declared in JSON (`custom.rules`) without hardcoding.
-- Watchman model evaluates recent messages + tool calls for policy drift.
+- Watchman model evaluates recent messages + tool calls + GCC history evidence for policy drift.
 - Watchman/critic output must be structured JSON (schema-constrained).
 - If model output is malformed, plugin retries in strict JSON-only mode (`strictJsonRetryAttempts`) before skipping enforcement.
 

@@ -50,6 +50,7 @@ writeFileSync(
       inspectAssistantTurns: true,
       inspectToolCalls: true,
       inspectCompaction: true,
+      requireModelDecision: false,
       includeRecentMessages: 8,
       includeRecentToolCalls: 8,
     },

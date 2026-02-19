@@ -23,6 +23,8 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 3. `tool.execute.after`
 - Records tool and output in recent evidence.
 - Updates checkpoint/failure/research debt.
+- Failure debt is model-judged first (failure policy).
+- Research debt is model-judged first (research policy).
 - Runs deterministic violation checks.
 - Evaluates user-defined `custom.rules` against tool/command/output context.
 - Applies per-rule escalation (soft reminder first, then hard interruption).
@@ -47,6 +49,7 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 - Recent tool-call records
 - Debt state (checkpoint/research/failure/mcp indicators)
 - Custom rule counters
+- GCC history evidence (main/commit/log/metadata tails + semantic similar-attempt matches)
 - Law summary
 - Plain-text policy (`.GCC/law-policy.txt`) and optional agent guide excerpt
 

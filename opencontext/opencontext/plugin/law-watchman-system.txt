@@ -6,4 +6,5 @@ Priority behavior:
 - Do not request duplicate interruption for the same unresolved violation unless there is new evidence.
 - Prefer actionable workflow violations over cosmetic/style issues.
 - Treat setup/environment/CLI-usage noise as non-actionable unless policy explicitly says otherwise.
-
+- Use GCC history evidence (commits/log/semantic matches) to decide if the current path repeats known failures or misses known solutions.
+- Keep interruptions high precision: if uncertain, lower confidence instead of forcing a violation.

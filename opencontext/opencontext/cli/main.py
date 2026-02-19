@@ -22,6 +22,7 @@ console = Console()
 LAW_POLICY_FILENAME = "law-policy.txt"
 LAW_WATCHMAN_PROMPT_FILENAME = "law-watchman-system.txt"
 LAW_FAILURE_POLICY_FILENAME = "law-failure-policy.txt"
+LAW_RESEARCH_POLICY_FILENAME = "law-research-policy.txt"
 AGENT_GUIDE_FILENAME = "AGENT_GUIDE.txt"
 LAW_RUNTIME_FILENAME = "law-runtime.json"
 
@@ -82,6 +83,7 @@ def init(project_name: Optional[str], goal: Optional[str], goal_file: Optional[P
         console.print(f"[green]✓ Policy file ready:[/green] {assets.get('policy', '')}")
         console.print(f"[green]✓ Watchman prompt ready:[/green] {assets.get('watchman_prompt', '')}")
         console.print(f"[green]✓ Failure policy ready:[/green] {assets.get('failure_policy', '')}")
+        console.print(f"[green]✓ Research policy ready:[/green] {assets.get('research_policy', '')}")
         console.print(f"[green]✓ Runtime config ready:[/green] {assets.get('runtime', '')}")
         console.print(f"[green]✓ Agent guide generated:[/green] {assets.get('guide', '')}")
     except Exception as e:
@@ -355,6 +357,10 @@ def _law_failure_policy_path() -> Path:
     return Path.cwd() / ".GCC" / LAW_FAILURE_POLICY_FILENAME
 
 
+def _law_research_policy_path() -> Path:
+    return Path.cwd() / ".GCC" / LAW_RESEARCH_POLICY_FILENAME
+
+
 def _agent_guide_path() -> Path:
     return Path.cwd() / ".GCC" / AGENT_GUIDE_FILENAME
 
@@ -444,11 +450,34 @@ def _default_failure_policy_text() -> str:
     ).strip() + "\n"
 
 
+def _default_research_policy_text() -> str:
+    return dedent(
+        """\
+        OpenContext Research Capture Policy (editable)
+
+        Purpose
+        - Decide whether recent research activity should be checkpointed into OpenContext.
+        - This policy is passed to the research classifier model.
+
+        Classification
+        - require_capture=true when docs/specs/papers/GitHub/similar-project research produced implementation-relevant findings worth preserving.
+        - require_capture=false when activity is routine/local exploration without meaningful external research insights.
+        - If the activity looks similar to a previously solved hurdle, prefer require_capture=true to prevent repeating mistakes.
+
+        Output contract (strict JSON):
+        - require_capture: boolean
+        - reason: string
+        - confidence: number (0..1)
+        """
+    ).strip() + "\n"
+
+
 def _render_agent_guide_text(
     law_path: Path,
     policy_path: Path,
     watchman_prompt_path: Path,
     failure_policy_path: Path,
+    research_policy_path: Path,
     runtime_path: Path,
     global_runtime_path: Path,
 ) -> str:
@@ -474,6 +503,7 @@ def _render_agent_guide_text(
         - {policy_path}: plain-text workflow law document for watchman judgment.
         - {watchman_prompt_path}: editable watchman system prompt (controls judgment style/strictness).
         - {failure_policy_path}: editable failure-lookup classifier policy (actionable vs noise).
+        - {research_policy_path}: editable research-capture classifier policy (what must be checkpointed).
         - {runtime_path}: optional project-local provider secret/model overrides.
         - {global_runtime_path}: optional global provider secret/model overrides.
         - .GCC/law-enforcer-trace.jsonl: runtime evidence log for requests/responses/violations.
@@ -531,6 +561,8 @@ def _render_agent_guide_text(
            - Fine-tune watchman behavior (dedupe and strictness policy).
         7) Failure lookup policy updates ({failure_policy_path})
            - Control when failure lookups are required vs ignored as environment noise.
+        8) Research capture policy updates ({research_policy_path})
+           - Control when docs/GitHub/similar-project findings must be checkpointed.
 
         Custom Rule Schema (JSON)
         - id (string, required): stable rule identifier.
@@ -646,6 +678,7 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
     policy_template = _get_package_template_path(LAW_POLICY_FILENAME)
     watchman_prompt_template = _get_package_template_path(LAW_WATCHMAN_PROMPT_FILENAME)
     failure_policy_template = _get_package_template_path(LAW_FAILURE_POLICY_FILENAME)
+    research_policy_template = _get_package_template_path(LAW_RESEARCH_POLICY_FILENAME)
     runtime_template = _get_package_template_path(LAW_RUNTIME_FILENAME)
 
     if force or not law_target.exists():
@@ -662,9 +695,11 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
     policy_target = _resolve_policy_path_from_law_data(law_data)
     watchman_prompt_target = _resolve_watchman_prompt_path_from_law_data(law_data)
     failure_policy_target = _resolve_failure_policy_path_from_law_data(law_data)
+    research_policy_target = _resolve_research_policy_path_from_law_data(law_data)
     policy_target.parent.mkdir(parents=True, exist_ok=True)
     watchman_prompt_target.parent.mkdir(parents=True, exist_ok=True)
     failure_policy_target.parent.mkdir(parents=True, exist_ok=True)
+    research_policy_target.parent.mkdir(parents=True, exist_ok=True)
 
     if force or not policy_target.exists():
         if policy_template.exists():
@@ -693,6 +728,15 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
     else:
         results["failure_policy"] = f"kept:{failure_policy_target}"
 
+    if force or not research_policy_target.exists():
+        if research_policy_template.exists():
+            shutil.copy2(research_policy_template, research_policy_target)
+        else:
+            research_policy_target.write_text(_default_research_policy_text(), encoding="utf-8")
+        results["research_policy"] = f"written:{research_policy_target}"
+    else:
+        results["research_policy"] = f"kept:{research_policy_target}"
+
     if force or not runtime_target.exists():
         if runtime_template.exists():
             shutil.copy2(runtime_template, runtime_target)
@@ -711,6 +755,7 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
             policy_path=policy_target,
             watchman_prompt_path=watchman_prompt_target,
             failure_policy_path=failure_policy_target,
+            research_policy_path=research_policy_target,
             runtime_path=runtime_target,
             global_runtime_path=global_runtime_target,
         ),
@@ -782,6 +827,20 @@ def _resolve_failure_policy_path_from_law_data(law_data: Optional[Dict]) -> Path
     return Path.cwd() / ".GCC" / policy_name
 
 
+def _resolve_research_policy_path_from_law_data(law_data: Optional[Dict]) -> Path:
+    policy_name = LAW_RESEARCH_POLICY_FILENAME
+    if isinstance(law_data, dict):
+        research = law_data.get("research", {})
+        if isinstance(research, dict) and isinstance(research.get("capturePolicyFile"), str):
+            candidate = research.get("capturePolicyFile", "").strip()
+            if candidate:
+                policy_name = candidate
+    policy_path = Path(policy_name)
+    if policy_path.is_absolute():
+        return policy_path
+    return Path.cwd() / ".GCC" / policy_name
+
+
 def _read_runtime_critic(path: Path) -> Dict:
     if not path.exists():
         return {}
@@ -829,6 +888,25 @@ def _validate_law_content(law: Dict) -> List[str]:
     else:
         errors.append("gcc must be a mapping/object.")
 
+    research = law.get("research", {})
+    if isinstance(research, dict):
+        if "capturePolicyFile" in research and not isinstance(research.get("capturePolicyFile"), str):
+            errors.append("research.capturePolicyFile must be a string.")
+        if "captureClassifierEnabled" in research and not isinstance(
+            research.get("captureClassifierEnabled"), bool
+        ):
+            errors.append("research.captureClassifierEnabled must be true or false.")
+        if "captureClassifierRequireModelDecision" in research and not isinstance(
+            research.get("captureClassifierRequireModelDecision"), bool
+        ):
+            errors.append("research.captureClassifierRequireModelDecision must be true or false.")
+        if "captureClassifierMinConfidence" in research:
+            value = research.get("captureClassifierMinConfidence")
+            if not isinstance(value, (int, float)) or value < 0 or value > 1:
+                errors.append("research.captureClassifierMinConfidence must be a number between 0 and 1.")
+    else:
+        errors.append("research must be a mapping/object.")
+
     critic = law.get("critic", {})
     if isinstance(critic, dict):
         if "enabled" in critic and not isinstance(critic.get("enabled"), bool):
@@ -862,6 +940,14 @@ def _validate_law_content(law: Dict) -> List[str]:
             errors.append("watchman.dedupeSameViolationUntilResolved must be true or false.")
         if "systemPromptFile" in watchman and not isinstance(watchman.get("systemPromptFile"), str):
             errors.append("watchman.systemPromptFile must be a string.")
+        if "minConfidence" in watchman:
+            value = watchman.get("minConfidence")
+            if not isinstance(value, (int, float)) or value < 0 or value > 1:
+                errors.append("watchman.minConfidence must be a number between 0 and 1.")
+        if "requireModelDecision" in watchman and not isinstance(
+            watchman.get("requireModelDecision"), bool
+        ):
+            errors.append("watchman.requireModelDecision must be true or false.")
     else:
         errors.append("watchman must be a mapping/object.")
 
@@ -955,6 +1041,7 @@ def law_init(force: bool):
     console.print(f"[green]✓ Policy file:[/green] {assets.get('policy', '')}")
     console.print(f"[green]✓ Watchman prompt:[/green] {assets.get('watchman_prompt', '')}")
     console.print(f"[green]✓ Failure policy:[/green] {assets.get('failure_policy', '')}")
+    console.print(f"[green]✓ Research policy:[/green] {assets.get('research_policy', '')}")
     console.print(f"[green]✓ Runtime config:[/green] {assets.get('runtime', '')}")
     console.print(f"[green]✓ Agent guide:[/green] {assets.get('guide', '')}")
     console.print("Validate with: opencontext law validate")
@@ -1021,13 +1108,20 @@ def law_status(law_path_opt: Optional[Path]):
     watchman_turns = law_data.get("watchman", {}).get("inspectAssistantTurns", "unknown")
     watchman_plan_skip = law_data.get("watchman", {}).get("skipDuringPlanningAgent", "unknown")
     watchman_dedupe = law_data.get("watchman", {}).get("dedupeSameViolationUntilResolved", "unknown")
+    watchman_min_conf = law_data.get("watchman", {}).get("minConfidence", "unknown")
+    watchman_model_only = law_data.get("watchman", {}).get("requireModelDecision", "unknown")
     watchman_prompt_file = law_data.get("watchman", {}).get("systemPromptFile", LAW_WATCHMAN_PROMPT_FILENAME)
+    research_policy_file = law_data.get("research", {}).get("capturePolicyFile", LAW_RESEARCH_POLICY_FILENAME)
+    research_classifier_enabled = law_data.get("research", {}).get("captureClassifierEnabled", "unknown")
+    research_classifier_conf = law_data.get("research", {}).get("captureClassifierMinConfidence", "unknown")
+    research_classifier_model_only = law_data.get("research", {}).get("captureClassifierRequireModelDecision", "unknown")
     custom_enabled = law_data.get("custom", {}).get("enabled", "unknown")
     custom_mode = law_data.get("custom", {}).get("escalation", {}).get("mode", "unknown")
     custom_rules = len(law_data.get("custom", {}).get("rules", []) or [])
     policy_path = _resolve_policy_path_from_law_data(law_data)
     watchman_prompt_path = Path.cwd() / ".GCC" / watchman_prompt_file
     failure_policy_path = Path.cwd() / ".GCC" / failure_policy_file
+    research_policy_path = Path.cwd() / ".GCC" / research_policy_file
     runtime_path = _law_runtime_path()
     global_runtime_path = Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME
     guide_path = law_data.get("agentGuide", {}).get("path", f".GCC/{AGENT_GUIDE_FILENAME}")
@@ -1047,12 +1141,18 @@ def law_status(law_path_opt: Optional[Path]):
         f"Watch assistant turns: {watchman_turns}\n"
         f"Skip watchman during planning: {watchman_plan_skip}\n"
         f"Watchman dedupe unresolved violations: {watchman_dedupe}\n"
+        f"Watchman min confidence: {watchman_min_conf}\n"
+        f"Watchman require model decision: {watchman_model_only}\n"
+        f"Research classifier enabled: {research_classifier_enabled}\n"
+        f"Research classifier min confidence: {research_classifier_conf}\n"
+        f"Research classifier require model decision: {research_classifier_model_only}\n"
         f"Custom rules enabled: {custom_enabled}\n"
         f"Custom escalation mode: {custom_mode}\n"
         f"Custom rule count: {custom_rules}\n"
         f"Policy file: {policy_path}\n"
         f"Watchman prompt file: {watchman_prompt_path}\n"
         f"Failure policy file: {failure_policy_path}\n"
+        f"Research policy file: {research_policy_path}\n"
         f"Runtime file (project): {runtime_path}\n"
         f"Runtime file (global): {global_runtime_path}\n"
         f"Agent guide: {guide_path}"
@@ -1106,6 +1206,12 @@ def law_doctor(law_path_opt: Optional[Path]):
     if not failure_policy_path.is_absolute():
         failure_policy_path = Path.cwd() / ".GCC" / failure_policy_name
     add("PASS" if failure_policy_path.exists() else "WARN", "Failure lookup policy", str(failure_policy_path))
+
+    research_policy_name = law_data.get("research", {}).get("capturePolicyFile", LAW_RESEARCH_POLICY_FILENAME)
+    research_policy_path = Path(research_policy_name)
+    if not research_policy_path.is_absolute():
+        research_policy_path = Path.cwd() / ".GCC" / research_policy_name
+    add("PASS" if research_policy_path.exists() else "WARN", "Research capture policy", str(research_policy_path))
 
     trace_name = law_data.get("observability", {}).get("traceFile", "law-enforcer-trace.jsonl")
     trace_path = Path.cwd() / ".GCC" / trace_name
@@ -1244,6 +1350,11 @@ def law_guide():
         failure_policy_path.write_text(_default_failure_policy_text(), encoding="utf-8")
         console.print(f"[yellow]Failure policy file was missing and has been created:[/yellow] {failure_policy_path}")
 
+    research_policy_path = _resolve_research_policy_path_from_law_data(law_data)
+    if not research_policy_path.exists():
+        research_policy_path.write_text(_default_research_policy_text(), encoding="utf-8")
+        console.print(f"[yellow]Research policy file was missing and has been created:[/yellow] {research_policy_path}")
+
     guide_path = _agent_guide_path()
     guide_path.write_text(
         _render_agent_guide_text(
@@ -1251,6 +1362,7 @@ def law_guide():
             policy_path=policy_path,
             watchman_prompt_path=watchman_prompt_path,
             failure_policy_path=failure_policy_path,
+            research_policy_path=research_policy_path,
             runtime_path=runtime_path,
             global_runtime_path=Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME,
         ),
@@ -1336,6 +1448,7 @@ def setup_opencode(global_install: bool):
                 console.print(f"[green]✓ Policy file:[/green] {assets.get('policy', '')}")
                 console.print(f"[green]✓ Watchman prompt:[/green] {assets.get('watchman_prompt', '')}")
                 console.print(f"[green]✓ Failure policy:[/green] {assets.get('failure_policy', '')}")
+                console.print(f"[green]✓ Research policy:[/green] {assets.get('research_policy', '')}")
                 console.print(f"[green]✓ Runtime config:[/green] {assets.get('runtime', '')}")
                 console.print(f"[green]✓ Agent guide:[/green] {assets.get('guide', '')}")
             elif not gcc_dir.exists():

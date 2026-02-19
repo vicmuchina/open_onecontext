@@ -19,6 +19,7 @@ run_cli init --project-name "LawAssetsTest" --goal "Validate law asset generatio
 [[ -f ".GCC/law-policy.txt" ]] || { echo "FAIL  missing .GCC/law-policy.txt"; exit 1; }
 [[ -f ".GCC/law-watchman-system.txt" ]] || { echo "FAIL  missing .GCC/law-watchman-system.txt"; exit 1; }
 [[ -f ".GCC/law-failure-policy.txt" ]] || { echo "FAIL  missing .GCC/law-failure-policy.txt"; exit 1; }
+[[ -f ".GCC/law-research-policy.txt" ]] || { echo "FAIL  missing .GCC/law-research-policy.txt"; exit 1; }
 [[ -f ".GCC/law-runtime.json" ]] || { echo "FAIL  missing .GCC/law-runtime.json"; exit 1; }
 [[ -f ".GCC/AGENT_GUIDE.txt" ]] || { echo "FAIL  missing .GCC/AGENT_GUIDE.txt"; exit 1; }
 
@@ -41,6 +42,10 @@ grep -q "law-watchman-system.txt" ".GCC/AGENT_GUIDE.txt" || {
 }
 grep -q "law-failure-policy.txt" ".GCC/AGENT_GUIDE.txt" || {
   echo "FAIL  AGENT_GUIDE.txt missing failure policy guidance"
+  exit 1
+}
+grep -q "law-research-policy.txt" ".GCC/AGENT_GUIDE.txt" || {
+  echo "FAIL  AGENT_GUIDE.txt missing research policy guidance"
   exit 1
 }
 
