@@ -291,7 +291,7 @@ opencontext context --log [--lines 50]
 opencontext context --metadata file_structure
 
 # Search across all context
-opencontext context --search "authentication"
+opencontext context --search "authentication" --limit 20
 
 # Export context as JSON
 opencontext context --export --format json

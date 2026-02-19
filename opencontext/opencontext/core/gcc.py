@@ -573,6 +573,8 @@ Branch created. No previous progress.
         log: bool = False,
         lines: int = 20,
         metadata_key: Optional[str] = None,
+        search_query: Optional[str] = None,
+        search_limit: int = 20,
     ) -> str:
         """Retrieve context at varying granularity.
         
@@ -582,6 +584,8 @@ Branch created. No previous progress.
             log: Show execution log.
             lines: Number of log lines to show.
             metadata_key: Show specific metadata segment.
+            search_query: Search phrase across GCC memory files.
+            search_limit: Maximum number of search hits to return.
             
         Returns:
             Context information as string.
@@ -594,6 +598,49 @@ Branch created. No previous progress.
 
         if not branch_dir.exists():
             return f"Branch '{target_branch}' does not exist."
+
+        # Search across context files
+        if search_query:
+            query = search_query.strip()
+            if not query:
+                return "Search query is empty."
+            query_lower = query.lower()
+            max_hits = max(1, min(int(search_limit or 20), 200))
+            results: List[str] = []
+
+            search_files = [
+                self.main_file,
+                self.evolution_file,
+                branch_dir / "commit.md",
+                branch_dir / "log.md",
+                branch_dir / "metadata.yaml",
+            ]
+            for file_path in search_files:
+                if not file_path.exists():
+                    continue
+                try:
+                    content = file_path.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                for idx, line in enumerate(content.splitlines(), start=1):
+                    if query_lower in line.lower():
+                        cleaned = line.strip()
+                        if not cleaned:
+                            continue
+                        results.append(f"{file_path}:L{idx}: {cleaned}")
+                        if len(results) >= max_hits:
+                            break
+                if len(results) >= max_hits:
+                    break
+
+            if not results:
+                return f"No results found for '{query}'."
+
+            header = [
+                f"Search results for '{query}' (showing up to {max_hits}):",
+                "",
+            ]
+            return "\n".join(header + [f"- {row}" for row in results])
 
         # Show specific commit
         if commit:

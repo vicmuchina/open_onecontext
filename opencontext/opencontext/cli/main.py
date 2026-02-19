@@ -168,6 +168,7 @@ def switch(name: str):
 @click.option('--lines', '-n', default=20, help='Number of log lines to show')
 @click.option('--metadata', '-m', help='Show specific metadata segment')
 @click.option('--search', '-s', help='Search across all context')
+@click.option('--limit', default=20, show_default=True, help='Max search results when using --search')
 @click.option('--export', '-e', is_flag=True, help='Export as JSON')
 @click.option('--format', '-f', default='json', type=click.Choice(['json', 'yaml']),
               help='Export format')
@@ -178,6 +179,7 @@ def context(
     lines: int,
     metadata: Optional[str],
     search: Optional[str],
+    limit: int,
     export: bool,
     format: str,
 ):
@@ -198,6 +200,8 @@ def context(
             log=log,
             lines=lines,
             metadata_key=metadata,
+            search_query=search,
+            search_limit=limit,
         )
         
         if export:

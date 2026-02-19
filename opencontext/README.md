@@ -192,6 +192,9 @@ node ./scripts/test-opencode-plugin-custom-rules.mjs
 # Validate law asset generation from CLI (law json + policy + agent guide)
 ./scripts/test-opencontext-law-assets.sh
 
+# Validate context search/limit behavior used by law-enforcer guidance
+./scripts/test-opencontext-context-search.sh
+
 # Run serve-mode plugin test (headless API path)
 ./scripts/test-opencode-serve-plugin.sh
 
@@ -417,7 +420,7 @@ opencontext context --log [--lines 50]
 opencontext context --metadata file_structure
 
 # Search context
-opencontext context --search "authentication"
+opencontext context --search "authentication" --limit 20
 
 # Export as JSON
 opencontext context --export --format json

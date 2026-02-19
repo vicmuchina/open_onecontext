@@ -117,6 +117,9 @@ opencontext context --log --lines 50
 # Specific metadata
 opencontext context --metadata approaches
 
+# Search relevant prior attempts/findings
+opencontext context --search "failed attempt" --limit 20
+
 # Export as JSON
 opencontext context --export --format json
 ```

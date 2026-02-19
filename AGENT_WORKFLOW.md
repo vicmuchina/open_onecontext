@@ -100,6 +100,7 @@ node scripts/test-opencode-plugin-planning-guard.mjs
 node scripts/test-opencode-plugin-custom-rules.mjs
 node scripts/test-opencode-plugin-runtime-config.mjs
 ./scripts/test-opencontext-law-assets.sh
+./scripts/test-opencontext-context-search.sh
 RUN_TIMEOUT_SECONDS=90 ./scripts/test-opencode-plugin.sh
 ./scripts/test-opencode-serve-plugin.sh
 CHUTES_API_KEY=<key> ./scripts/test-opencode-watchman-trace-live.sh
