@@ -15,6 +15,7 @@ opencontext init --project-name "<name>" --goal "<goal>"
 opencontext init --project-name "<name>" --goal-file SPEC.md
 opencontext law init
 opencontext law validate
+opencontext law doctor
 opencontext law guide
 ```
 
@@ -70,6 +71,7 @@ tail -n 50 .GCC/law-enforcer-trace.jsonl
 - Check law status:
 ```bash
 opencontext law status
+opencontext law doctor
 ```
 
 ## Tune Provider or Behavior
@@ -80,6 +82,8 @@ Edit `.GCC/law-enforcer.json`:
 - Custom rules (`custom.rules`) and escalation (`custom.escalation`)
 
 Edit `.GCC/law-policy.txt` for natural-language laws watched continuously by the enforcer model.
+Edit `.GCC/law-watchman-system.txt` to customize watchman system behavior and strictness.
+Edit `.GCC/law-failure-policy.txt` to customize actionable-failure classification.
 Edit `.GCC/law-runtime.json` for project-local API key/model overrides.
 Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.
 
@@ -98,6 +102,7 @@ node scripts/test-opencode-plugin-watchman-malformed.mjs
 node scripts/test-opencode-plugin-provider-config.mjs
 node scripts/test-opencode-plugin-planning-guard.mjs
 node scripts/test-opencode-plugin-custom-rules.mjs
+node scripts/test-opencode-plugin-failure-debt-filter.mjs
 node scripts/test-opencode-plugin-runtime-config.mjs
 ./scripts/test-opencontext-law-assets.sh
 ./scripts/test-opencontext-context-search.sh

@@ -153,6 +153,8 @@ ls -la ~/.config/opencode/plugins/opencontext-reminder.js
 # Check law policy (after opencontext init + opencontext law init)
 ls -la .GCC/law-enforcer.json
 ls -la .GCC/law-policy.txt
+ls -la .GCC/law-watchman-system.txt
+ls -la .GCC/law-failure-policy.txt
 ls -la .GCC/AGENT_GUIDE.txt
 ```
 
@@ -188,6 +190,9 @@ node ./scripts/test-opencode-plugin-planning-guard.mjs
 
 # Run custom-rule soft->hard escalation test
 node ./scripts/test-opencode-plugin-custom-rules.mjs
+
+# Run failure lookup noise filter + unresolved-debt dedupe test
+node ./scripts/test-opencode-plugin-failure-debt-filter.mjs
 
 # Validate law asset generation from CLI (law json + policy + agent guide)
 ./scripts/test-opencontext-law-assets.sh
@@ -251,6 +256,7 @@ The plugin automatically loads and will continuously enforce GCC discipline.
 ```bash
 opencontext law init
 opencontext law validate
+opencontext law doctor
 opencontext law status
 opencontext law guide
 ```
@@ -282,7 +288,7 @@ Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but yo
     "model": "<provider_model_id>",
     "apiKeyEnv": "CHUTES_API_KEY",
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
-    "strictJsonRetryAttempts": 1
+    "strictJsonRetryAttempts": 2
   }
 }
 ```
@@ -292,6 +298,7 @@ Notes:
 - If your provider does not use `Authorization: Bearer`, change `authHeader` and `apiKeyPrefix`.
 - The plugin always sends `response_format: { type: "json_schema", ... }`.
 - If provider output is malformed, it retries in stricter JSON-only mode (`critic.strictJsonRetryAttempts`) before skipping enforcement.
+- Deterministic law checks remain active even when model output is malformed, so enforcement does not collapse.
 
 Watchman request/response traces are persisted to:
 
@@ -303,6 +310,8 @@ Agent customization files:
 
 ```bash
 .GCC/law-policy.txt
+.GCC/law-watchman-system.txt
+.GCC/law-failure-policy.txt
 .GCC/AGENT_GUIDE.txt
 ```
 
@@ -310,6 +319,8 @@ Custom workflow rules (no plugin code edits needed):
 - Edit `.GCC/law-enforcer.json` -> `custom.rules`
 - Edit `.GCC/law-enforcer.json` -> `custom.escalation`
 - Edit `.GCC/law-policy.txt` for natural-language laws
+- Edit `.GCC/law-watchman-system.txt` to customize watchman system behavior
+- Edit `.GCC/law-failure-policy.txt` to customize failure lookup classification
 - Rebuild guide after major changes: `opencontext law guide`
 
 ### 3. Day-to-Day Workflow with OpenCode
@@ -322,6 +333,7 @@ opencontext init --project-name "MyApp" --goal "Build a web scraper"
 opencontext init --project-name "MyApp" --goal-file SPEC.md
 opencontext law init
 opencontext law validate
+opencontext law doctor
 ```
 
 2) Start OpenCode normally (interactive) or via server mode:
@@ -727,6 +739,10 @@ Example `law-runtime.json`:
 {
   "gcc": {
     "requireCheckpointEveryTools": 6,
+    "requireFailedAttemptLookup": true,
+    "failureLookupPolicyFile": "law-failure-policy.txt",
+    "failureClassifierEnabled": true,
+    "failureClassifierMinConfidence": 0.55,
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false
   },
@@ -741,7 +757,7 @@ Example `law-runtime.json`:
     "model": "openai/gpt-oss-120b-TEE",
     "apiKeyEnv": "CHUTES_API_KEY",
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
-    "strictJsonRetryAttempts": 1
+    "strictJsonRetryAttempts": 2
   },
   "watchman": {
     "enabled": true,
@@ -749,7 +765,9 @@ Example `law-runtime.json`:
     "inspectToolCalls": true,
     "inspectCompaction": true,
     "inspectOnIdle": true,
-    "skipDuringPlanningAgent": true
+    "skipDuringPlanningAgent": true,
+    "dedupeSameViolationUntilResolved": true,
+    "systemPromptFile": "law-watchman-system.txt"
   },
   "custom": {
     "policyFile": "law-policy.txt",
@@ -781,15 +799,19 @@ Example `law-runtime.json`:
 
 Text policy + handbook files:
 - `.GCC/law-policy.txt` (natural-language workflow laws)
+- `.GCC/law-watchman-system.txt` (editable watchman system prompt)
+- `.GCC/law-failure-policy.txt` (editable failure-lookup classifier policy)
 - `.GCC/law-runtime.json` (project-level API key/model/provider overrides)
 - `.GCC/AGENT_GUIDE.txt` (full agent-readable setup/customization guide)
 
 Customizing without code changes:
 1. Edit `.GCC/law-policy.txt` to define plain-language laws.
-2. Edit `.GCC/law-enforcer.json` -> `custom.rules` for trigger-based checks.
-3. Edit `.GCC/law-enforcer.json` -> `custom.hints` to advertise preferred tools/skills/commands/MCPs.
-4. Edit `.GCC/law-enforcer.json` -> `custom.escalation` to tune soft reminder vs hard interruption.
-5. Run `opencontext law validate` and `opencontext law guide`.
+2. Edit `.GCC/law-watchman-system.txt` to tune watchman judgment behavior.
+3. Edit `.GCC/law-failure-policy.txt` to control actionable-failure classification.
+4. Edit `.GCC/law-enforcer.json` -> `custom.rules` for trigger-based checks.
+5. Edit `.GCC/law-enforcer.json` -> `custom.hints` to advertise preferred tools/skills/commands/MCPs.
+6. Edit `.GCC/law-enforcer.json` -> `custom.escalation` to tune soft reminder vs hard interruption.
+7. Run `opencontext law validate`, `opencontext law doctor`, and `opencontext law guide`.
 
 ## Examples
 

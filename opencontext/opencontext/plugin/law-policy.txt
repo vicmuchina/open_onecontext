@@ -18,3 +18,5 @@ Example Rules
 Notes
 - Structured trigger logic belongs in .GCC/law-enforcer.json under custom.rules.
 - This file is for natural-language policy and can be edited anytime.
+- Watchman system behavior prompt: .GCC/law-watchman-system.txt
+- Failure lookup classifier prompt: .GCC/law-failure-policy.txt

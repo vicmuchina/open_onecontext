@@ -9,6 +9,9 @@ gcc:
   requireInit: true
   requireCheckpointEveryTools: 6
   requireFailedAttemptLookup: true
+  failureLookupPolicyFile: law-failure-policy.txt
+  failureClassifierEnabled: true
+  failureClassifierMinConfidence: 0.55
   compactionCheckpointRequired: true
   skipCheckpointDuringPlanningAgent: true
   countReadOnlyToolsForCheckpoint: false
@@ -34,7 +37,7 @@ critic:
   timeoutMs: 8000
   maxTokensCritic: 120
   maxTokensWatchman: 320
-  strictJsonRetryAttempts: 1
+  strictJsonRetryAttempts: 2
 watchman:
   enabled: true
   inspectAssistantTurns: true
@@ -42,6 +45,8 @@ watchman:
   inspectCompaction: true
   inspectOnIdle: true
   skipDuringPlanningAgent: true
+  dedupeSameViolationUntilResolved: true
+  systemPromptFile: law-watchman-system.txt
   includeRecentMessages: 12
   includeRecentToolCalls: 12
 observability:

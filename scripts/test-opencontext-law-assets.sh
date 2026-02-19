@@ -17,10 +17,13 @@ run_cli init --project-name "LawAssetsTest" --goal "Validate law asset generatio
 
 [[ -f ".GCC/law-enforcer.json" ]] || { echo "FAIL  missing .GCC/law-enforcer.json"; exit 1; }
 [[ -f ".GCC/law-policy.txt" ]] || { echo "FAIL  missing .GCC/law-policy.txt"; exit 1; }
+[[ -f ".GCC/law-watchman-system.txt" ]] || { echo "FAIL  missing .GCC/law-watchman-system.txt"; exit 1; }
+[[ -f ".GCC/law-failure-policy.txt" ]] || { echo "FAIL  missing .GCC/law-failure-policy.txt"; exit 1; }
 [[ -f ".GCC/law-runtime.json" ]] || { echo "FAIL  missing .GCC/law-runtime.json"; exit 1; }
 [[ -f ".GCC/AGENT_GUIDE.txt" ]] || { echo "FAIL  missing .GCC/AGENT_GUIDE.txt"; exit 1; }
 
 run_cli law validate
+run_cli law doctor
 run_cli law guide
 
 [[ -s ".GCC/AGENT_GUIDE.txt" ]] || { echo "FAIL  AGENT_GUIDE.txt is empty"; exit 1; }
@@ -30,6 +33,14 @@ grep -q "custom.rules" ".GCC/AGENT_GUIDE.txt" || {
 }
 grep -q "law-runtime.json" ".GCC/AGENT_GUIDE.txt" || {
   echo "FAIL  AGENT_GUIDE.txt missing runtime config guidance"
+  exit 1
+}
+grep -q "law-watchman-system.txt" ".GCC/AGENT_GUIDE.txt" || {
+  echo "FAIL  AGENT_GUIDE.txt missing watchman prompt guidance"
+  exit 1
+}
+grep -q "law-failure-policy.txt" ".GCC/AGENT_GUIDE.txt" || {
+  echo "FAIL  AGENT_GUIDE.txt missing failure policy guidance"
   exit 1
 }
 

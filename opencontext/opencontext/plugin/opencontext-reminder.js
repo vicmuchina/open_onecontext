@@ -16,6 +16,8 @@ const CONFIG = {
   lawFileNameJson: "law-enforcer.json",
   lawFileNameYaml: "law-enforcer.yaml",
   lawPolicyFileName: "law-policy.txt",
+  watchmanSystemPromptFileName: "law-watchman-system.txt",
+  failurePolicyFileName: "law-failure-policy.txt",
   agentGuideFileName: "AGENT_GUIDE.txt",
   runtimeConfigFileName: "law-runtime.json",
   traceFileName: "law-enforcer-trace.jsonl",
@@ -41,6 +43,9 @@ const DEFAULT_LAW = {
     requireInit: true,
     requireCheckpointEveryTools: 6,
     requireFailedAttemptLookup: true,
+    failureLookupPolicyFile: "law-failure-policy.txt",
+    failureClassifierEnabled: true,
+    failureClassifierMinConfidence: 0.55,
     compactionCheckpointRequired: true,
     skipCheckpointDuringPlanningAgent: true,
     countReadOnlyToolsForCheckpoint: false,
@@ -69,7 +74,7 @@ const DEFAULT_LAW = {
     timeoutMs: 8000,
     maxTokensCritic: 120,
     maxTokensWatchman: 320,
-    strictJsonRetryAttempts: 1,
+    strictJsonRetryAttempts: 2,
   },
   watchman: {
     enabled: true,
@@ -78,6 +83,8 @@ const DEFAULT_LAW = {
     inspectCompaction: true,
     inspectOnIdle: true,
     skipDuringPlanningAgent: true,
+    dedupeSameViolationUntilResolved: true,
+    systemPromptFile: "law-watchman-system.txt",
     includeRecentMessages: 12,
     includeRecentToolCalls: 12,
   },
@@ -132,6 +139,11 @@ let mcpNamesCache = {
   fetchedAt: 0,
   data: [],
 };
+let cliCapabilitiesCache = {
+  fetchedAt: 0,
+  directory: "",
+  data: null,
+};
 
 const CRITIC_RESPONSE_SCHEMA = {
   type: "object",
@@ -152,6 +164,17 @@ const WATCHMAN_RESPONSE_SCHEMA = {
     rule: { type: "string" },
     reason: { type: "string" },
     correction_prompt: { type: "string" },
+    confidence: { type: "number" },
+  },
+};
+
+const FAILURE_LOOKUP_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["require_lookup", "reason", "confidence"],
+  properties: {
+    require_lookup: { type: "boolean" },
+    reason: { type: "string" },
     confidence: { type: "number" },
   },
 };
@@ -182,6 +205,7 @@ function getSessionState(sessionId) {
       lastAssistantText: "",
       customRuleViolations: {},
       customRuleReminderAt: {},
+      ruleDebtOpen: {},
     });
   }
   return sessionStateById.get(resolvedSessionId);
@@ -454,6 +478,23 @@ function sanitizeLaw(law) {
     sanitized.gcc.skipCheckpointDuringPlanningAgent !== false;
   sanitized.gcc.countReadOnlyToolsForCheckpoint =
     sanitized.gcc.countReadOnlyToolsForCheckpoint === true;
+  sanitized.gcc.failureLookupPolicyFile =
+    typeof sanitized.gcc.failureLookupPolicyFile === "string" &&
+    sanitized.gcc.failureLookupPolicyFile.trim()
+      ? sanitized.gcc.failureLookupPolicyFile.trim()
+      : CONFIG.failurePolicyFileName;
+  sanitized.gcc.failureClassifierEnabled =
+    sanitized.gcc.failureClassifierEnabled !== false;
+  sanitized.gcc.failureClassifierMinConfidence = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.gcc.failureClassifierMinConfidence
+          ?? DEFAULT_LAW.gcc.failureClassifierMinConfidence
+      )
+    )
+  );
   if (!sanitized.critic.provider || typeof sanitized.critic.provider !== "string") {
     sanitized.critic.provider = "openai_compatible";
   }
@@ -490,7 +531,12 @@ function sanitizeLaw(law) {
   );
   sanitized.critic.strictJsonRetryAttempts = Math.max(
     0,
-    Math.min(5, Math.round(Number(sanitized.critic.strictJsonRetryAttempts ?? 1)))
+    Math.min(
+      5,
+      Math.round(
+        Number(sanitized.critic.strictJsonRetryAttempts ?? DEFAULT_LAW.critic.strictJsonRetryAttempts)
+      )
+    )
   );
   if (!sanitized.critic.apiKeyEnv || typeof sanitized.critic.apiKeyEnv !== "string") {
     sanitized.critic.apiKeyEnv = "CHUTES_API_KEY";
@@ -504,6 +550,13 @@ function sanitizeLaw(law) {
   sanitized.watchman.inspectCompaction = sanitized.watchman.inspectCompaction !== false;
   sanitized.watchman.inspectOnIdle = sanitized.watchman.inspectOnIdle !== false;
   sanitized.watchman.skipDuringPlanningAgent = sanitized.watchman.skipDuringPlanningAgent !== false;
+  sanitized.watchman.dedupeSameViolationUntilResolved =
+    sanitized.watchman.dedupeSameViolationUntilResolved !== false;
+  sanitized.watchman.systemPromptFile =
+    typeof sanitized.watchman.systemPromptFile === "string" &&
+    sanitized.watchman.systemPromptFile.trim()
+      ? sanitized.watchman.systemPromptFile.trim()
+      : CONFIG.watchmanSystemPromptFileName;
   sanitized.watchman.includeRecentMessages = Math.max(
     2,
     Math.min(50, Number(sanitized.watchman.includeRecentMessages || 12))
@@ -671,9 +724,31 @@ function sanitizeRuntimeCritic(runtimeRaw) {
   const out = {};
   for (const key of allowedKeys) {
     const value = critic[key];
-    if (value !== undefined && value !== null) {
-      out[key] = value;
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    if (
+      key === "authHeader" &&
+      typeof value === "string" &&
+      value.trim().toLowerCase() === "authorization"
+    ) {
+      continue;
     }
+    if (
+      key === "apiKeyPrefix" &&
+      typeof value === "string" &&
+      value.trim() === "Bearer"
+    ) {
+      continue;
+    }
+    if (
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 0 &&
+      ["headers", "request"].includes(key)
+    ) {
+      continue;
+    }
+    out[key] = value;
   }
   return out;
 }
@@ -723,9 +798,93 @@ async function loadRuntimeCriticConfig(client, directory) {
   return result;
 }
 
+function defaultWatchmanSystemPrompt() {
+  return [
+    "You are the OpenContext Law Enforcer Watchman.",
+    "Judge workflow-law compliance using provided law summary, policy text, agent guide, messages, tool calls, and debt flags.",
+    "Return STRICT JSON only (no prose/markdown) matching schema fields exactly.",
+    "Critical behavior:",
+    "- Do not request duplicate interruption for the exact same unresolved violation without new evidence.",
+    "- For failed-attempt workflow, only flag violations for actionable implementation retries.",
+    "- Treat pure environment/setup/CLI-usage noise as non-actionable unless policy explicitly says otherwise.",
+  ].join("\n");
+}
+
+function defaultFailureLookupPolicyPrompt() {
+  return [
+    "You classify whether OpenContext failure lookup is required before retry.",
+    "Return STRICT JSON with fields: require_lookup (bool), reason (string), confidence (number).",
+    "Set require_lookup=true ONLY for actionable implementation failures where retrying without prior-attempt lookup is risky.",
+    "Set require_lookup=false for setup/env/package-manager/CLI usage noise unless it clearly reflects implementation logic failure.",
+    "Examples of noise: missing option, command not found, missing file during exploration, dependency uninstall quirks.",
+  ].join("\n");
+}
+
+async function loadOpenContextCliCapabilities(client, directory) {
+  if (
+    cliCapabilitiesCache.data &&
+    cliCapabilitiesCache.directory === directory &&
+    Date.now() - cliCapabilitiesCache.fetchedAt < CONFIG.lawCacheMs
+  ) {
+    return cliCapabilitiesCache.data;
+  }
+
+  const baseline = {
+    available: false,
+    contextSearch: false,
+    contextLimit: false,
+    contextLog: false,
+  };
+  try {
+    const { execSync } = await import("child_process");
+    const help = execSync("opencontext context --help", {
+      cwd: directory,
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    const caps = {
+      available: true,
+      contextSearch: help.includes("--search"),
+      contextLimit: help.includes("--limit"),
+      contextLog: help.includes("--log"),
+    };
+    cliCapabilitiesCache = {
+      fetchedAt: Date.now(),
+      directory,
+      data: caps,
+    };
+    await log(client, "debug", "law.cli_capabilities.loaded", caps);
+    return caps;
+  } catch (error) {
+    await log(client, "debug", "law.cli_capabilities.failed", {
+      error: error?.message ?? String(error),
+    });
+    cliCapabilitiesCache = {
+      fetchedAt: Date.now(),
+      directory,
+      data: baseline,
+    };
+    return baseline;
+  }
+}
+
 function getLawPolicyPath(directory, law) {
   const fileName = String(law?.custom?.policyFile || CONFIG.lawPolicyFileName).trim();
   return join(directory, CONFIG.gccDir, fileName || CONFIG.lawPolicyFileName);
+}
+
+function getWatchmanSystemPromptPath(directory, law) {
+  const configured = String(
+    law?.watchman?.systemPromptFile || CONFIG.watchmanSystemPromptFileName
+  ).trim();
+  return join(directory, CONFIG.gccDir, configured || CONFIG.watchmanSystemPromptFileName);
+}
+
+function getFailureLookupPolicyPath(directory, law) {
+  const configured = String(
+    law?.gcc?.failureLookupPolicyFile || CONFIG.failurePolicyFileName
+  ).trim();
+  return join(directory, CONFIG.gccDir, configured || CONFIG.failurePolicyFileName);
 }
 
 function getAgentGuidePath(directory, law) {
@@ -794,6 +953,38 @@ async function loadLaw(client, directory) {
       });
     }
   }
+  const watchmanPromptPath = getWatchmanSystemPromptPath(directory, law);
+  law.watchman.systemPromptPath = watchmanPromptPath;
+  law.watchman.systemPromptText = defaultWatchmanSystemPrompt();
+  if (existsSync(watchmanPromptPath)) {
+    try {
+      const customPrompt = readFileSync(watchmanPromptPath, "utf-8");
+      if (customPrompt && customPrompt.trim()) {
+        law.watchman.systemPromptText = clipText(customPrompt, 12000);
+      }
+    } catch (error) {
+      await log(client, "warn", "law.watchman_prompt_load_failed", {
+        watchmanPromptPath,
+        error: error?.message ?? String(error),
+      });
+    }
+  }
+  const failurePolicyPath = getFailureLookupPolicyPath(directory, law);
+  law.gcc.failureLookupPolicyPath = failurePolicyPath;
+  law.gcc.failureLookupPolicyText = defaultFailureLookupPolicyPrompt();
+  if (existsSync(failurePolicyPath)) {
+    try {
+      const customFailurePolicy = readFileSync(failurePolicyPath, "utf-8");
+      if (customFailurePolicy && customFailurePolicy.trim()) {
+        law.gcc.failureLookupPolicyText = clipText(customFailurePolicy, 12000);
+      }
+    } catch (error) {
+      await log(client, "warn", "law.failure_policy_load_failed", {
+        failurePolicyPath,
+        error: error?.message ?? String(error),
+      });
+    }
+  }
   const guidePath = getAgentGuidePath(directory, law);
   law.agentGuide.pathResolved = guidePath;
   law.agentGuide.text = "";
@@ -807,6 +998,7 @@ async function loadLaw(client, directory) {
       });
     }
   }
+  law.cliCapabilities = await loadOpenContextCliCapabilities(client, directory);
   lawCache = {
     fetchedAt: Date.now(),
     path: lawPath,
@@ -939,19 +1131,117 @@ function detectResearchSignal(tool, args, toolOutput, law) {
   };
 }
 
-function detectFailureSignal(tool, output) {
+function detectFailureSignal(tool, output, commandText = "") {
   const toolName = toLowerSafe(tool);
-  if (toolName.includes("read")) return false;
+  if (toolName.includes("read")) return { detected: false, category: "read_only" };
   const blob = typeof output === "string" ? output : JSON.stringify(output || {});
   const text = toLowerSafe(blob);
-  return (
+  const hasFailureKeyword =
     text.includes("error") ||
     text.includes("failed") ||
     text.includes("traceback") ||
     text.includes("exception") ||
     text.includes("assertionerror") ||
-    text.includes("test failed")
-  );
+    text.includes("test failed");
+  if (!hasFailureKeyword) {
+    return { detected: false, category: "none" };
+  }
+
+  const usageNoise = [
+    "usage:",
+    "no such option",
+    "invalid option",
+    "unknown option",
+    "did you mean",
+    "command not found",
+    "no such file or directory",
+  ];
+  if (usageNoise.some((needle) => text.includes(needle))) {
+    return {
+      detected: true,
+      category: "usage_noise",
+      reason: "Likely CLI usage/exploration noise.",
+      excerpt: clipText(blob, 500),
+    };
+  }
+
+  const environmentNoise = [
+    "cannot uninstall",
+    "no record file was found",
+    "installed by debian",
+    "permission denied",
+    "connection refused",
+    "timed out",
+    "network is unreachable",
+    "temporary failure",
+  ];
+  if (environmentNoise.some((needle) => text.includes(needle))) {
+    return {
+      detected: true,
+      category: "environment_noise",
+      reason: "Likely environment/dependency noise.",
+      excerpt: clipText(blob, 500),
+    };
+  }
+
+  const implementationSignals = [
+    "traceback",
+    "assertionerror",
+    "test failed",
+    "failed tests",
+    "compilation failed",
+    "build failed",
+    "typeerror",
+    "syntaxerror",
+    "referenceerror",
+  ];
+  if (implementationSignals.some((needle) => text.includes(needle))) {
+    return {
+      detected: true,
+      category: "implementation_failure",
+      reason: "Likely actionable implementation failure.",
+      excerpt: clipText(blob, 500),
+    };
+  }
+
+  if (toolName.includes("bash") && isLikelyReadOnlyBashCommand(commandText)) {
+    return {
+      detected: true,
+      category: "read_only_noise",
+      reason: "Failure happened during read-only exploration.",
+      excerpt: clipText(blob, 500),
+    };
+  }
+
+  return {
+    detected: true,
+    category: "generic_failure",
+    reason: "Unclassified failure-like output.",
+    excerpt: clipText(blob, 500),
+  };
+}
+
+function shouldRequireFailureLookupFallback(signal, commandText = "") {
+  if (!signal?.detected) return false;
+  if (signal.category === "implementation_failure" || signal.category === "generic_failure") {
+    return true;
+  }
+  // If command is clearly a retry-oriented implementation action, keep safety on.
+  const cmd = toLowerSafe(commandText);
+  if (
+    cmd.includes("pytest") ||
+    cmd.includes("npm test") ||
+    cmd.includes("pnpm test") ||
+    cmd.includes("yarn test") ||
+    cmd.includes("cargo test") ||
+    cmd.includes("go test") ||
+    cmd.includes("npm run build") ||
+    cmd.includes("pnpm build") ||
+    cmd.includes("yarn build")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isPlanningAgentName(agent, law) {
@@ -1137,7 +1427,17 @@ async function collectWatchmanEvidence(client, law, state) {
 function buildLawSummaryForInspector(law) {
   return {
     mode: law.mode,
-    gcc: law.gcc,
+    gcc: {
+      requireInit: law.gcc.requireInit,
+      requireCheckpointEveryTools: law.gcc.requireCheckpointEveryTools,
+      requireFailedAttemptLookup: law.gcc.requireFailedAttemptLookup,
+      failureLookupPolicyFile: law.gcc.failureLookupPolicyFile,
+      failureClassifierEnabled: law.gcc.failureClassifierEnabled,
+      failureClassifierMinConfidence: law.gcc.failureClassifierMinConfidence,
+      compactionCheckpointRequired: law.gcc.compactionCheckpointRequired,
+      skipCheckpointDuringPlanningAgent: law.gcc.skipCheckpointDuringPlanningAgent,
+      countReadOnlyToolsForCheckpoint: law.gcc.countReadOnlyToolsForCheckpoint,
+    },
     mcp: law.mcp,
     research: law.research,
     custom: {
@@ -1163,7 +1463,10 @@ function buildLawSummaryForInspector(law) {
       inspectCompaction: law.watchman.inspectCompaction,
       inspectOnIdle: law.watchman.inspectOnIdle,
       skipDuringPlanningAgent: law.watchman.skipDuringPlanningAgent,
+      dedupeSameViolationUntilResolved: law.watchman.dedupeSameViolationUntilResolved,
+      systemPromptFile: law.watchman.systemPromptFile,
     },
+    cliCapabilities: law.cliCapabilities || {},
     runtime: {
       criticConfigSources: law?.critic?.runtimeConfigSources || [],
       criticConfigPaths: law?.critic?.runtimeConfigPaths || {},
@@ -1528,6 +1831,30 @@ function extractMessageTextForDebug(message) {
   return safeJsonString(message);
 }
 
+function extractCompletionDebugText(data) {
+  const message = data?.choices?.[0]?.message;
+  if (message) {
+    const debug = extractMessageTextForDebug(message);
+    if (debug) return debug;
+  }
+  const outputs = Array.isArray(data?.output) ? data.output : [];
+  for (const out of outputs) {
+    if (typeof out?.content === "string" && out.content.trim()) {
+      return out.content;
+    }
+    const parts = Array.isArray(out?.content) ? out.content : [];
+    for (const part of parts) {
+      if (typeof part?.text === "string" && part.text.trim()) {
+        return part.text;
+      }
+      if (typeof part?.output_text === "string" && part.output_text.trim()) {
+        return part.output_text;
+      }
+    }
+  }
+  return safeJsonString(data || {});
+}
+
 function extractStructuredObjectFromCompletion(data) {
   const message = data?.choices?.[0]?.message || {};
   const candidates = [];
@@ -1567,6 +1894,26 @@ function extractStructuredObjectFromCompletion(data) {
     const args = call?.function?.arguments;
     const parsedArgs = tryParseJsonObject(args);
     if (parsedArgs) candidates.push(parsedArgs);
+  }
+
+  // Some OpenAI-compatible providers return a "responses"-style payload.
+  const outputs = Array.isArray(data?.output) ? data.output : [];
+  for (const out of outputs) {
+    const outObj = tryParseJsonObject(out);
+    if (outObj) candidates.push(outObj);
+    const parts = Array.isArray(out?.content) ? out.content : [];
+    for (const part of parts) {
+      const partObj = tryParseJsonObject(part);
+      if (partObj) candidates.push(partObj);
+      if (typeof part?.text === "string") {
+        const parsedText = tryParseJsonObject(part.text);
+        if (parsedText) candidates.push(parsedText);
+      }
+      if (typeof part?.output_text === "string") {
+        const parsedOutputText = tryParseJsonObject(part.output_text);
+        if (parsedOutputText) candidates.push(parsedOutputText);
+      }
+    }
   }
 
   for (const candidate of candidates) {
@@ -1621,6 +1968,15 @@ function isValidWatchmanParsed(parsed) {
     typeof parsed.rule === "string" &&
     typeof parsed.reason === "string" &&
     typeof parsed.correction_prompt === "string"
+  );
+}
+
+function isValidFailureLookupParsed(parsed) {
+  return (
+    parsed &&
+    typeof parsed === "object" &&
+    typeof parsed.require_lookup === "boolean" &&
+    typeof parsed.reason === "string"
   );
 }
 
@@ -1727,7 +2083,7 @@ async function callLawModel({ law, apiKey, model, timeoutMs, body }) {
       ok: true,
       data,
       parsed: extractStructuredObjectFromCompletion(data),
-      raw: clipText(extractMessageTextForDebug(data?.choices?.[0]?.message || {}), 500),
+      raw: clipText(extractCompletionDebugText(data), 500),
     };
   } finally {
     clearTimeout(timer);
@@ -1790,6 +2146,84 @@ async function runCriticCheck(client, law, payload) {
   }
 }
 
+async function runFailureLookupClassifier(client, law, payload) {
+  if (!law?.gcc?.failureClassifierEnabled) {
+    return { available: false, requireLookup: false, source: "classifier_disabled" };
+  }
+  if (!law?.critic?.enabled) {
+    return { available: false, requireLookup: false, source: "critic_disabled" };
+  }
+
+  const { apiKey, sourceEnv } = resolveCriticApiKey(law);
+  if (!apiKey) {
+    return { available: false, requireLookup: false, source: "no_api_key" };
+  }
+  const model = resolveCriticModel(law);
+
+  try {
+    const result = await requestStructuredVerdict({
+      law,
+      apiKey,
+      model,
+      timeoutMs: law.critic.timeoutMs || 8000,
+      schemaName: "opencontext_failure_lookup",
+      schema: FAILURE_LOOKUP_RESPONSE_SCHEMA,
+      maxTokens: Math.min(
+        320,
+        Math.max(64, Number(law.critic.maxTokensCritic || 120))
+      ),
+      messages: [
+        {
+          role: "system",
+          content:
+            law?.gcc?.failureLookupPolicyText || defaultFailureLookupPolicyPrompt(),
+        },
+        {
+          role: "user",
+          content: JSON.stringify(payload),
+        },
+      ],
+      isValidParsed: isValidFailureLookupParsed,
+    });
+    if (!result.ok) {
+      return {
+        available: false,
+        requireLookup: false,
+        source: result.source || "http_error",
+        status: result.status,
+        error: result.raw,
+        attempts: result.attempts || 1,
+        model,
+        apiKeyEnv: sourceEnv,
+      };
+    }
+    const parsed = result.parsed;
+    const confidence = Number(parsed?.confidence ?? 0);
+    const minConfidence = Number(law?.gcc?.failureClassifierMinConfidence ?? 0.55);
+    const requireLookup = parsed?.require_lookup === true && confidence >= minConfidence;
+    return {
+      available: true,
+      requireLookup,
+      source: "failure_classifier_model",
+      reason: clipText(parsed?.reason || "", 300),
+      confidence: Number.isFinite(confidence) ? confidence : 0,
+      threshold: minConfidence,
+      model,
+      apiKeyEnv: sourceEnv,
+      attempts: result.attempts || 1,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      requireLookup: false,
+      source: "failure_classifier_error",
+      error: error?.message ?? String(error),
+      model,
+      apiKeyEnv: sourceEnv,
+    };
+  }
+}
+
 async function runWatchmanCheck(client, law, payload) {
   if (!law.watchman.enabled) {
     return { available: false, violation: false, source: "watchman_disabled" };
@@ -1817,7 +2251,7 @@ async function runWatchmanCheck(client, law, payload) {
         {
           role: "system",
           content:
-            "You are the OpenContext Law Enforcer Watchman. Judge only workflow-law compliance against policy text, configured custom rules, and observed tool behavior. Respond in strict JSON schema.",
+            law?.watchman?.systemPromptText || defaultWatchmanSystemPrompt(),
         },
         {
           role: "user",
@@ -1873,6 +2307,18 @@ async function maybeInterrupt(client, directory, law, state, violation) {
   const minGap = law.cooldowns.interruptionSeconds * 1000;
   const sameRuleGap = law.cooldowns.sameRuleSeconds * 1000;
   const lastForRule = state.lastRuleInjectionAt[violation.rule] || 0;
+  const applyDebtDedupe =
+    law?.watchman?.dedupeSameViolationUntilResolved !== false &&
+    violation?.source !== "custom_rule";
+
+  if (applyDebtDedupe && state.ruleDebtOpen?.[violation.rule]) {
+    await log(client, "debug", "law.interrupt.skipped_open_debt", {
+      sessionId: state.sessionId,
+      rule: violation.rule,
+      source: violation.source || "deterministic",
+    });
+    return false;
+  }
 
   if (now - state.lastInjectionAt < minGap) return false;
   if (now - lastForRule < sameRuleGap) return false;
@@ -1913,6 +2359,9 @@ async function maybeInterrupt(client, directory, law, state, violation) {
     state.lastRuleInjectionAt[violation.rule] = now;
     state.consecutiveInjections += 1;
     state.hasViolationDebt = true;
+    if (applyDebtDedupe) {
+      state.ruleDebtOpen[violation.rule] = true;
+    }
     await log(client, "warn", "law.interrupt.injected", {
       sessionId: state.sessionId,
       rule: violation.rule,
@@ -1935,6 +2384,12 @@ async function maybeInterrupt(client, directory, law, state, violation) {
     message: `⚖️ Law Enforcer: ${violation.rule}\n${violation.detail}`,
   });
   return injected;
+}
+
+function clearRuleDebt(state, ruleName) {
+  if (!state?.ruleDebtOpen) return;
+  if (!ruleName) return;
+  delete state.ruleDebtOpen[ruleName];
 }
 
 function shouldHardInterruptCustomRule(law, violationCount, ruleSpecificThreshold = null) {
@@ -2012,6 +2467,24 @@ async function maybeHandleCustomRuleViolation(client, directory, law, state, vio
   return false;
 }
 
+function buildFailureLookupCommands(law) {
+  const caps = law?.cliCapabilities || {};
+  const commands = [];
+  if (caps.contextSearch) {
+    const searchCmd = caps.contextLimit
+      ? 'opencontext context --search "<feature or failure>" --limit 20'
+      : 'opencontext context --search "<feature or failure>"';
+    commands.push(searchCmd);
+  }
+  if (caps.contextLog || !caps.available) {
+    commands.push("opencontext context --log --lines 80");
+  }
+  if (commands.length === 0) {
+    commands.push("opencontext context");
+  }
+  return commands;
+}
+
 function buildViolations({
   directory,
   law,
@@ -2072,7 +2545,7 @@ function buildViolations({
       violations.push({
         rule: "failed_attempt_lookup_required",
         detail: "A failure was detected. Retrieve previous attempts before retrying.",
-        commands: ['opencontext context --search "<feature or failure>"', "opencontext context --log --lines 80"],
+        commands: buildFailureLookupCommands(law),
         useCritic: true,
       });
     }
@@ -2210,6 +2683,8 @@ async function evaluateAndEnforce({
       trigger,
       law: buildLawSummaryForInspector(law),
       lawPolicyText: law?.custom?.policyText || "",
+      watchmanSystemPromptText: law?.watchman?.systemPromptText || "",
+      failureLookupPolicyText: law?.gcc?.failureLookupPolicyText || "",
       agentGuideText: law?.agentGuide?.includeInWatchmanPayload ? law?.agentGuide?.text || "" : "",
       latestAssistant,
       recentMessages: evidence.recentMessages,
@@ -2229,6 +2704,8 @@ async function evaluateAndEnforce({
         debts: evidence.debts,
         customRuleCounters: state.customRuleViolations,
         lawPolicyText: clipText(law?.custom?.policyText || "", 1200),
+        watchmanSystemPromptText: clipText(law?.watchman?.systemPromptText || "", 1000),
+        failureLookupPolicyText: clipText(law?.gcc?.failureLookupPolicyText || "", 800),
       },
     });
 
@@ -2259,6 +2736,12 @@ async function evaluateAndEnforce({
     if (!verdict.available || !verdict.violation) {
       if (latestAssistant.id) {
         state.lastInspectedAssistantMessageId = latestAssistant.id;
+      }
+      clearRuleDebt(state, "watchman_policy_violation");
+      for (const key of Object.keys(state.ruleDebtOpen || {})) {
+        if (String(key).startsWith("watchman_")) {
+          clearRuleDebt(state, key);
+        }
       }
       if (!violationDetected) {
         state.consecutiveInjections = 0;
@@ -2309,6 +2792,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           state.consecutiveInjections = 0;
           state.customRuleViolations = {};
           state.customRuleReminderAt = {};
+          state.ruleDebtOpen = {};
         }
         const hasGCC = isGCCInitialized(directory);
         if (!hasGCC) {
@@ -2343,6 +2827,22 @@ export const OpenContextPlugin = async ({ client, directory }) => {
             type: "info",
             timeout: 9000,
             message: `🧰 MCP awareness check\nAvailable MCPs: ${summary}\nUse MCPs when relevant before defaulting to generic tools.`,
+          });
+        }
+        const caps = law?.cliCapabilities || {};
+        if (!caps.available || !caps.contextSearch) {
+          await toast(client, {
+            type: "warning",
+            timeout: 9000,
+            message:
+              "⚠️ OpenContext CLI capability mismatch detected.\n`opencontext context --search` is unavailable in current PATH version.",
+          });
+        } else if (!caps.contextLimit) {
+          await toast(client, {
+            type: "info",
+            timeout: 7000,
+            message:
+              "ℹ️ `opencontext context` supports --search but not --limit.\nLaw Enforcer will use compatibility-safe commands.",
           });
         }
       }
@@ -2592,6 +3092,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 
       if (isMcpTool(tool)) {
         state.mcpUsed = true;
+        clearRuleDebt(state, "mcp_usage_expected");
       }
 
       if (isOpenContextCommitCommand(commandText)) {
@@ -2604,12 +3105,18 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           state.customRuleViolations = {};
           state.customRuleReminderAt = {};
         }
+        clearRuleDebt(state, "checkpoint_overdue");
+        clearRuleDebt(state, "compaction_checkpoint_required");
+        clearRuleDebt(state, "research_capture_required");
+        clearRuleDebt(state, "failed_attempt_lookup_required");
       }
       if (isOpenContextContextLookup(commandText)) {
         state.pendingFailureLookup = false;
+        clearRuleDebt(state, "failed_attempt_lookup_required");
       }
       if (isOpenContextInitCommand(commandText) && isGCCInitialized(directory)) {
         state.hasViolationDebt = false;
+        clearRuleDebt(state, "gcc_init_required");
       }
 
       const researchSignal = detectResearchSignal(tool, args, toolOutput, law);
@@ -2634,9 +3141,51 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         }
       }
 
-      if (law.gcc.requireFailedAttemptLookup && detectFailureSignal(tool, toolOutput)) {
-        state.pendingFailureLookup = true;
-        state.hasViolationDebt = true;
+      if (law.gcc.requireFailedAttemptLookup) {
+        const failureSignal = detectFailureSignal(tool, toolOutput, commandText);
+        if (failureSignal.detected) {
+          let requireLookup = shouldRequireFailureLookupFallback(failureSignal, commandText);
+          let classifierVerdict = null;
+          if (law.gcc.failureClassifierEnabled) {
+            classifierVerdict = await runFailureLookupClassifier(client, law, {
+              tool,
+              commandText: clipText(commandText, 800),
+              toolOutput: failureSignal.excerpt || clipText(safeJsonString(toolOutput), 800),
+              failureCategory: failureSignal.category,
+              failureReason: failureSignal.reason || "",
+              policyText: law?.gcc?.failureLookupPolicyText || "",
+              debts: {
+                pendingFailureLookup: state.pendingFailureLookup,
+                sinceCommitCount: state.sinceCommitCount,
+              },
+            });
+            if (classifierVerdict.available) {
+              requireLookup = classifierVerdict.requireLookup === true;
+            }
+          }
+          await appendLawTrace(client, directory, law, {
+            type: "failure.lookup.classifier",
+            sessionId: state.sessionId,
+            tool: {
+              name: tool,
+              commandText: clipText(commandText),
+            },
+            signal: {
+              category: failureSignal.category,
+              reason: failureSignal.reason || "",
+            },
+            classifier: classifierVerdict || {
+              available: false,
+              source: "fallback_only",
+              requireLookup,
+            },
+            requireLookup,
+          });
+          if (requireLookup) {
+            state.pendingFailureLookup = true;
+            state.hasViolationDebt = true;
+          }
+        }
       }
 
       const interrupted = await evaluateAndEnforce({

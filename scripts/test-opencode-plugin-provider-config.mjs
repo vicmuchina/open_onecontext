@@ -55,7 +55,7 @@ writeFileSync(
     watchman: {
       enabled: true,
       inspectAssistantTurns: true,
-      inspectToolCalls: false,
+      inspectToolCalls: true,
       inspectCompaction: false,
       inspectOnIdle: false,
       skipDuringPlanningAgent: false,
@@ -72,10 +72,13 @@ writeFileSync(
 
 const prompts = [];
 const requests = [];
+const logs = [];
 
 const client = {
   app: {
-    log: async () => {},
+    log: async ({ body }) => {
+      logs.push(body);
+    },
   },
   tui: {
     showToast: async () => {},
@@ -142,6 +145,17 @@ try {
     },
   });
 
+  await hooks["tool.execute.after"](
+    {
+      tool: "bash",
+      args: { command: "ls -la" },
+      sessionID: "sess-provider-1",
+    },
+    {
+      output: "ok",
+    }
+  );
+
   await hooks.event({
     event: {
       type: "message.updated",
@@ -161,6 +175,7 @@ try {
   });
 
   if (requests.length === 0) {
+    console.error(JSON.stringify(logs.slice(-20), null, 2));
     console.error("FAIL  provider call was not made");
     process.exit(1);
   }

@@ -4,6 +4,8 @@
 from pathlib import Path
 from textwrap import dedent
 from typing import Dict, List, Optional
+import subprocess
+import os
 
 import click
 import json
@@ -18,6 +20,8 @@ from opencontext.tui.dashboard import launch_dashboard
 console = Console()
 
 LAW_POLICY_FILENAME = "law-policy.txt"
+LAW_WATCHMAN_PROMPT_FILENAME = "law-watchman-system.txt"
+LAW_FAILURE_POLICY_FILENAME = "law-failure-policy.txt"
 AGENT_GUIDE_FILENAME = "AGENT_GUIDE.txt"
 LAW_RUNTIME_FILENAME = "law-runtime.json"
 
@@ -76,6 +80,8 @@ def init(project_name: Optional[str], goal: Optional[str], goal_file: Optional[P
         assets = _ensure_law_assets(force=False)
         console.print(f"[green]✓ Law config ready:[/green] {assets.get('law', '')}")
         console.print(f"[green]✓ Policy file ready:[/green] {assets.get('policy', '')}")
+        console.print(f"[green]✓ Watchman prompt ready:[/green] {assets.get('watchman_prompt', '')}")
+        console.print(f"[green]✓ Failure policy ready:[/green] {assets.get('failure_policy', '')}")
         console.print(f"[green]✓ Runtime config ready:[/green] {assets.get('runtime', '')}")
         console.print(f"[green]✓ Agent guide generated:[/green] {assets.get('guide', '')}")
     except Exception as e:
@@ -341,6 +347,14 @@ def _law_policy_path() -> Path:
     return Path.cwd() / ".GCC" / LAW_POLICY_FILENAME
 
 
+def _law_watchman_prompt_path() -> Path:
+    return Path.cwd() / ".GCC" / LAW_WATCHMAN_PROMPT_FILENAME
+
+
+def _law_failure_policy_path() -> Path:
+    return Path.cwd() / ".GCC" / LAW_FAILURE_POLICY_FILENAME
+
+
 def _agent_guide_path() -> Path:
     return Path.cwd() / ".GCC" / AGENT_GUIDE_FILENAME
 
@@ -393,9 +407,48 @@ def _default_law_policy_text() -> str:
     ).strip() + "\n"
 
 
+def _default_watchman_system_prompt_text() -> str:
+    return dedent(
+        """\
+        You are the OpenContext Law Enforcer Watchman.
+        Judge only workflow-law compliance using the provided law summary, policy text, agent guide, recent messages, and tool evidence.
+        Return STRICT JSON only matching the required schema exactly.
+
+        Core behavior
+        - Do not repeat the exact same interruption for an unresolved violation unless there is new evidence.
+        - Prioritize actionable implementation workflow violations.
+        - Treat setup/environment/CLI-usage noise as non-actionable unless policy explicitly marks it actionable.
+        """
+    ).strip() + "\n"
+
+
+def _default_failure_policy_text() -> str:
+    return dedent(
+        """\
+        OpenContext Failure Lookup Policy (editable)
+
+        Purpose
+        - Classify whether a detected failure should require `opencontext context` lookup before retry.
+        - This text is passed as system policy to the failure classifier model.
+
+        Classification Rules
+        - Require lookup (true): actionable implementation failures (tests, build/compiler/runtime errors, tracebacks, assertion failures) where retrying without history is risky.
+        - Do NOT require lookup (false): setup/environment/CLI noise (missing option, command not found, missing file during exploration, package manager metadata quirks, network/transient infra failures), unless explicitly marked as critical by the user.
+
+        Output Contract
+        - The model must return strict JSON:
+          - require_lookup: boolean
+          - reason: string
+          - confidence: number (0..1)
+        """
+    ).strip() + "\n"
+
+
 def _render_agent_guide_text(
     law_path: Path,
     policy_path: Path,
+    watchman_prompt_path: Path,
+    failure_policy_path: Path,
     runtime_path: Path,
     global_runtime_path: Path,
 ) -> str:
@@ -419,6 +472,8 @@ def _render_agent_guide_text(
         - .GCC/branches/*/(commit.md, log.md, metadata.yaml): branch memory artifacts.
         - {law_path}: machine-readable law config (JSON).
         - {policy_path}: plain-text workflow law document for watchman judgment.
+        - {watchman_prompt_path}: editable watchman system prompt (controls judgment style/strictness).
+        - {failure_policy_path}: editable failure-lookup classifier policy (actionable vs noise).
         - {runtime_path}: optional project-local provider secret/model overrides.
         - {global_runtime_path}: optional global provider secret/model overrides.
         - .GCC/law-enforcer-trace.jsonl: runtime evidence log for requests/responses/violations.
@@ -472,6 +527,10 @@ def _render_agent_guide_text(
            - soft_then_hard | hard_only | soft_only.
         5) Natural-language policy updates ({policy_path})
            - Human-readable law text for watchman.
+        6) Watchman system prompt updates ({watchman_prompt_path})
+           - Fine-tune watchman behavior (dedupe and strictness policy).
+        7) Failure lookup policy updates ({failure_policy_path})
+           - Control when failure lookups are required vs ignored as environment noise.
 
         Custom Rule Schema (JSON)
         - id (string, required): stable rule identifier.
@@ -537,6 +596,8 @@ def _render_agent_guide_text(
           opencontext law validate
         - Show active settings:
           opencontext law status
+        - Run full health check:
+          opencontext law doctor
 
         Common Misconfigurations
         - Wrong apiKeyEnv value (env var missing at runtime).
@@ -583,6 +644,8 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
 
     law_template = _get_package_template_path("law-enforcer.json")
     policy_template = _get_package_template_path(LAW_POLICY_FILENAME)
+    watchman_prompt_template = _get_package_template_path(LAW_WATCHMAN_PROMPT_FILENAME)
+    failure_policy_template = _get_package_template_path(LAW_FAILURE_POLICY_FILENAME)
     runtime_template = _get_package_template_path(LAW_RUNTIME_FILENAME)
 
     if force or not law_target.exists():
@@ -597,7 +660,11 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
     except Exception:
         law_data = {}
     policy_target = _resolve_policy_path_from_law_data(law_data)
+    watchman_prompt_target = _resolve_watchman_prompt_path_from_law_data(law_data)
+    failure_policy_target = _resolve_failure_policy_path_from_law_data(law_data)
     policy_target.parent.mkdir(parents=True, exist_ok=True)
+    watchman_prompt_target.parent.mkdir(parents=True, exist_ok=True)
+    failure_policy_target.parent.mkdir(parents=True, exist_ok=True)
 
     if force or not policy_target.exists():
         if policy_template.exists():
@@ -607,6 +674,24 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
         results["policy"] = f"written:{policy_target}"
     else:
         results["policy"] = f"kept:{policy_target}"
+
+    if force or not watchman_prompt_target.exists():
+        if watchman_prompt_template.exists():
+            shutil.copy2(watchman_prompt_template, watchman_prompt_target)
+        else:
+            watchman_prompt_target.write_text(_default_watchman_system_prompt_text(), encoding="utf-8")
+        results["watchman_prompt"] = f"written:{watchman_prompt_target}"
+    else:
+        results["watchman_prompt"] = f"kept:{watchman_prompt_target}"
+
+    if force or not failure_policy_target.exists():
+        if failure_policy_template.exists():
+            shutil.copy2(failure_policy_template, failure_policy_target)
+        else:
+            failure_policy_target.write_text(_default_failure_policy_text(), encoding="utf-8")
+        results["failure_policy"] = f"written:{failure_policy_target}"
+    else:
+        results["failure_policy"] = f"kept:{failure_policy_target}"
 
     if force or not runtime_target.exists():
         if runtime_template.exists():
@@ -624,6 +709,8 @@ def _ensure_law_assets(force: bool = False) -> Dict[str, str]:
         _render_agent_guide_text(
             law_path=law_target,
             policy_path=policy_target,
+            watchman_prompt_path=watchman_prompt_target,
+            failure_policy_path=failure_policy_target,
             runtime_path=runtime_target,
             global_runtime_path=global_runtime_target,
         ),
@@ -667,6 +754,49 @@ def _resolve_policy_path_from_law_data(law_data: Optional[Dict]) -> Path:
     return Path.cwd() / ".GCC" / policy_name
 
 
+def _resolve_watchman_prompt_path_from_law_data(law_data: Optional[Dict]) -> Path:
+    prompt_name = LAW_WATCHMAN_PROMPT_FILENAME
+    if isinstance(law_data, dict):
+        watchman = law_data.get("watchman", {})
+        if isinstance(watchman, dict) and isinstance(watchman.get("systemPromptFile"), str):
+            candidate = watchman.get("systemPromptFile", "").strip()
+            if candidate:
+                prompt_name = candidate
+    prompt_path = Path(prompt_name)
+    if prompt_path.is_absolute():
+        return prompt_path
+    return Path.cwd() / ".GCC" / prompt_name
+
+
+def _resolve_failure_policy_path_from_law_data(law_data: Optional[Dict]) -> Path:
+    policy_name = LAW_FAILURE_POLICY_FILENAME
+    if isinstance(law_data, dict):
+        gcc = law_data.get("gcc", {})
+        if isinstance(gcc, dict) and isinstance(gcc.get("failureLookupPolicyFile"), str):
+            candidate = gcc.get("failureLookupPolicyFile", "").strip()
+            if candidate:
+                policy_name = candidate
+    policy_path = Path(policy_name)
+    if policy_path.is_absolute():
+        return policy_path
+    return Path.cwd() / ".GCC" / policy_name
+
+
+def _read_runtime_critic(path: Path) -> Dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    critic = data.get("critic", data)
+    if not isinstance(critic, dict):
+        return {}
+    return critic
+
+
 def _validate_law_content(law: Dict) -> List[str]:
     """Return validation errors for law config."""
     errors = []
@@ -684,6 +814,14 @@ def _validate_law_content(law: Dict) -> List[str]:
             value = gcc.get("requireCheckpointEveryTools")
             if not isinstance(value, (int, float)) or value < 1:
                 errors.append("gcc.requireCheckpointEveryTools must be a positive number.")
+        if "failureLookupPolicyFile" in gcc and not isinstance(gcc.get("failureLookupPolicyFile"), str):
+            errors.append("gcc.failureLookupPolicyFile must be a string.")
+        if "failureClassifierEnabled" in gcc and not isinstance(gcc.get("failureClassifierEnabled"), bool):
+            errors.append("gcc.failureClassifierEnabled must be true or false.")
+        if "failureClassifierMinConfidence" in gcc:
+            value = gcc.get("failureClassifierMinConfidence")
+            if not isinstance(value, (int, float)) or value < 0 or value > 1:
+                errors.append("gcc.failureClassifierMinConfidence must be a number between 0 and 1.")
     else:
         errors.append("gcc must be a mapping/object.")
 
@@ -714,6 +852,12 @@ def _validate_law_content(law: Dict) -> List[str]:
             errors.append("watchman.inspectOnIdle must be true or false.")
         if "skipDuringPlanningAgent" in watchman and not isinstance(watchman.get("skipDuringPlanningAgent"), bool):
             errors.append("watchman.skipDuringPlanningAgent must be true or false.")
+        if "dedupeSameViolationUntilResolved" in watchman and not isinstance(
+            watchman.get("dedupeSameViolationUntilResolved"), bool
+        ):
+            errors.append("watchman.dedupeSameViolationUntilResolved must be true or false.")
+        if "systemPromptFile" in watchman and not isinstance(watchman.get("systemPromptFile"), str):
+            errors.append("watchman.systemPromptFile must be a string.")
     else:
         errors.append("watchman must be a mapping/object.")
 
@@ -805,6 +949,8 @@ def law_init(force: bool):
 
     console.print(f"[green]✓ Law file:[/green] {assets.get('law', '')}")
     console.print(f"[green]✓ Policy file:[/green] {assets.get('policy', '')}")
+    console.print(f"[green]✓ Watchman prompt:[/green] {assets.get('watchman_prompt', '')}")
+    console.print(f"[green]✓ Failure policy:[/green] {assets.get('failure_policy', '')}")
     console.print(f"[green]✓ Runtime config:[/green] {assets.get('runtime', '')}")
     console.print(f"[green]✓ Agent guide:[/green] {assets.get('guide', '')}")
     console.print("Validate with: opencontext law validate")
@@ -859,6 +1005,9 @@ def law_status(law_path_opt: Optional[Path]):
     mode = law_data.get("mode", "unknown")
     checkpoint = law_data.get("gcc", {}).get("requireCheckpointEveryTools", "unknown")
     planning_skip = law_data.get("gcc", {}).get("skipCheckpointDuringPlanningAgent", "unknown")
+    failure_policy_file = law_data.get("gcc", {}).get("failureLookupPolicyFile", LAW_FAILURE_POLICY_FILENAME)
+    failure_classifier_enabled = law_data.get("gcc", {}).get("failureClassifierEnabled", "unknown")
+    failure_classifier_conf = law_data.get("gcc", {}).get("failureClassifierMinConfidence", "unknown")
     critic_enabled = law_data.get("critic", {}).get("enabled", "unknown")
     critic_model = law_data.get("critic", {}).get("model", "unknown")
     critic_base = law_data.get("critic", {}).get("baseUrl", "unknown")
@@ -866,10 +1015,14 @@ def law_status(law_path_opt: Optional[Path]):
     watchman_enabled = law_data.get("watchman", {}).get("enabled", "unknown")
     watchman_turns = law_data.get("watchman", {}).get("inspectAssistantTurns", "unknown")
     watchman_plan_skip = law_data.get("watchman", {}).get("skipDuringPlanningAgent", "unknown")
+    watchman_dedupe = law_data.get("watchman", {}).get("dedupeSameViolationUntilResolved", "unknown")
+    watchman_prompt_file = law_data.get("watchman", {}).get("systemPromptFile", LAW_WATCHMAN_PROMPT_FILENAME)
     custom_enabled = law_data.get("custom", {}).get("enabled", "unknown")
     custom_mode = law_data.get("custom", {}).get("escalation", {}).get("mode", "unknown")
     custom_rules = len(law_data.get("custom", {}).get("rules", []) or [])
     policy_path = _resolve_policy_path_from_law_data(law_data)
+    watchman_prompt_path = Path.cwd() / ".GCC" / watchman_prompt_file
+    failure_policy_path = Path.cwd() / ".GCC" / failure_policy_file
     runtime_path = _law_runtime_path()
     global_runtime_path = Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME
     guide_path = law_data.get("agentGuide", {}).get("path", f".GCC/{AGENT_GUIDE_FILENAME}")
@@ -879,21 +1032,171 @@ def law_status(law_path_opt: Optional[Path]):
         f"Mode: {mode}\n"
         f"Checkpoint cadence: {checkpoint}\n"
         f"Skip checkpoint during planning: {planning_skip}\n"
+        f"Failure classifier enabled: {failure_classifier_enabled}\n"
+        f"Failure classifier min confidence: {failure_classifier_conf}\n"
         f"Critic enabled: {critic_enabled}\n"
         f"Critic model: {critic_model}\n"
         f"Critic endpoint: {critic_base}{critic_path}\n"
         f"Watchman enabled: {watchman_enabled}\n"
         f"Watch assistant turns: {watchman_turns}\n"
         f"Skip watchman during planning: {watchman_plan_skip}\n"
+        f"Watchman dedupe unresolved violations: {watchman_dedupe}\n"
         f"Custom rules enabled: {custom_enabled}\n"
         f"Custom escalation mode: {custom_mode}\n"
         f"Custom rule count: {custom_rules}\n"
         f"Policy file: {policy_path}\n"
+        f"Watchman prompt file: {watchman_prompt_path}\n"
+        f"Failure policy file: {failure_policy_path}\n"
         f"Runtime file (project): {runtime_path}\n"
         f"Runtime file (global): {global_runtime_path}\n"
         f"Agent guide: {guide_path}"
     )
     console.print(Panel(Text(status_text), title="Law Enforcer Status", border_style="blue"))
+
+
+@law.command("doctor")
+@click.option("--path", "law_path_opt", type=click.Path(path_type=Path), help="Path to law JSON/YAML file")
+def law_doctor(law_path_opt: Optional[Path]):
+    """Run end-to-end health checks for Law Enforcer setup."""
+    results: List[Dict[str, str]] = []
+
+    def add(level: str, check: str, detail: str):
+        results.append({"level": level, "check": check, "detail": detail})
+
+    gcc_dir = Path.cwd() / ".GCC"
+    if gcc_dir.exists():
+        add("PASS", "GCC initialized", str(gcc_dir))
+    else:
+        add("FAIL", "GCC initialized", "Missing .GCC (run: opencontext init)")
+
+    law_path = _resolve_law_path(law_path_opt)
+    law_data: Dict = {}
+    if law_path.exists():
+        try:
+            law_data = _read_law_file(law_path)
+            add("PASS", "Law file readable", str(law_path))
+            validation_errors = _validate_law_content(law_data)
+            if validation_errors:
+                add("FAIL", "Law schema validation", "; ".join(validation_errors[:5]))
+            else:
+                add("PASS", "Law schema validation", "ok")
+        except Exception as e:
+            add("FAIL", "Law file readable", f"{law_path} ({e})")
+            law_data = {}
+    else:
+        add("FAIL", "Law file exists", f"Missing {law_path} (run: opencontext law init)")
+
+    policy_path = _resolve_policy_path_from_law_data(law_data)
+    add("PASS" if policy_path.exists() else "WARN", "Policy file", str(policy_path))
+
+    watchman_prompt_name = law_data.get("watchman", {}).get("systemPromptFile", LAW_WATCHMAN_PROMPT_FILENAME)
+    watchman_prompt_path = Path(watchman_prompt_name)
+    if not watchman_prompt_path.is_absolute():
+        watchman_prompt_path = Path.cwd() / ".GCC" / watchman_prompt_name
+    add("PASS" if watchman_prompt_path.exists() else "WARN", "Watchman system prompt", str(watchman_prompt_path))
+
+    failure_policy_name = law_data.get("gcc", {}).get("failureLookupPolicyFile", LAW_FAILURE_POLICY_FILENAME)
+    failure_policy_path = Path(failure_policy_name)
+    if not failure_policy_path.is_absolute():
+        failure_policy_path = Path.cwd() / ".GCC" / failure_policy_name
+    add("PASS" if failure_policy_path.exists() else "WARN", "Failure lookup policy", str(failure_policy_path))
+
+    trace_name = law_data.get("observability", {}).get("traceFile", "law-enforcer-trace.jsonl")
+    trace_path = Path.cwd() / ".GCC" / trace_name
+    if gcc_dir.exists():
+        try:
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            trace_path.touch(exist_ok=True)
+            add("PASS", "Trace file writable", str(trace_path))
+        except Exception as e:
+            add("FAIL", "Trace file writable", f"{trace_path} ({e})")
+
+    runtime_project = _law_runtime_path()
+    runtime_global = Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME
+    add("PASS" if runtime_project.exists() else "WARN", "Project runtime config", str(runtime_project))
+    add("PASS" if runtime_global.exists() else "WARN", "Global runtime config", str(runtime_global))
+
+    # CLI capability probe for compatibility with plugin suggestions.
+    try:
+        proc = subprocess.run(
+            ["opencontext", "context", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        help_text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        if proc.returncode == 0:
+            add("PASS", "opencontext context command", "help available")
+            add("PASS" if "--search" in help_text else "FAIL", "Context search support", "--search")
+            add("PASS" if "--log" in help_text else "FAIL", "Context log support", "--log")
+            add("PASS" if "--limit" in help_text else "WARN", "Context limit support", "--limit")
+        else:
+            add("FAIL", "opencontext context command", "failed to run --help")
+    except Exception as e:
+        add("FAIL", "opencontext context command", str(e))
+
+    global_plugin = Path.home() / ".config" / "opencode" / "plugins" / "opencontext-reminder.js"
+    project_plugin = Path.cwd() / ".opencode" / "plugins" / "opencontext-reminder.js"
+    if global_plugin.exists() or project_plugin.exists():
+        add(
+            "PASS",
+            "OpenCode plugin install",
+            f"global={global_plugin.exists()} project={project_plugin.exists()}",
+        )
+    else:
+        add("WARN", "OpenCode plugin install", "Not found in global/project plugin paths")
+
+    critic = law_data.get("critic", {}) if isinstance(law_data, dict) else {}
+    api_key_env = critic.get("apiKeyEnv", "CHUTES_API_KEY")
+    env_names: List[str] = []
+    if isinstance(api_key_env, str) and api_key_env.strip():
+        env_names.append(api_key_env.strip())
+    elif isinstance(api_key_env, list):
+        env_names.extend([str(v).strip() for v in api_key_env if str(v).strip()])
+    env_names.extend(["CHUTES_API_KEY", "OPENAI_API_KEY", "OPENCONTEXT_LAW_API_KEY"])
+    env_names = list(dict.fromkeys(env_names))
+
+    project_runtime_critic = _read_runtime_critic(runtime_project)
+    global_runtime_critic = _read_runtime_critic(runtime_global)
+
+    api_key_source = ""
+    for name in env_names:
+        if isinstance(name, str) and name and os.environ.get(name, "").strip():
+            api_key_source = f"env:{name}"
+            break
+    if not api_key_source:
+        project_key = str(project_runtime_critic.get("apiKey", "")).strip()
+        global_key = str(global_runtime_critic.get("apiKey", "")).strip()
+        static_key = str(critic.get("apiKey", "")).strip() if isinstance(critic, dict) else ""
+        if project_key:
+            api_key_source = f"project_runtime:{runtime_project}"
+        elif global_key:
+            api_key_source = f"global_runtime:{runtime_global}"
+        elif static_key:
+            api_key_source = "law_file:critic.apiKey"
+    if api_key_source:
+        add("PASS", "Critic API key resolution", api_key_source)
+    else:
+        add("WARN", "Critic API key resolution", "No API key found via env/runtime/law file")
+
+    fail_count = sum(1 for r in results if r["level"] == "FAIL")
+    warn_count = sum(1 for r in results if r["level"] == "WARN")
+    pass_count = sum(1 for r in results if r["level"] == "PASS")
+
+    lines = [f"[{r['level']}] {r['check']}: {r['detail']}" for r in results]
+    summary = f"PASS={pass_count}  WARN={warn_count}  FAIL={fail_count}"
+    border = "green" if fail_count == 0 else "red"
+    console.print(
+        Panel(
+            Text(summary + "\n\n" + "\n".join(lines)),
+            title="Law Enforcer Doctor",
+            border_style=border,
+        )
+    )
+
+    if fail_count > 0:
+        raise click.Abort()
 
 
 @law.command("guide")
@@ -925,11 +1228,23 @@ def law_guide():
         )
         console.print(f"[yellow]Runtime config was missing and has been created:[/yellow] {runtime_path}")
 
+    watchman_prompt_path = _resolve_watchman_prompt_path_from_law_data(law_data)
+    if not watchman_prompt_path.exists():
+        watchman_prompt_path.write_text(_default_watchman_system_prompt_text(), encoding="utf-8")
+        console.print(f"[yellow]Watchman system prompt was missing and has been created:[/yellow] {watchman_prompt_path}")
+
+    failure_policy_path = _resolve_failure_policy_path_from_law_data(law_data)
+    if not failure_policy_path.exists():
+        failure_policy_path.write_text(_default_failure_policy_text(), encoding="utf-8")
+        console.print(f"[yellow]Failure policy file was missing and has been created:[/yellow] {failure_policy_path}")
+
     guide_path = _agent_guide_path()
     guide_path.write_text(
         _render_agent_guide_text(
             law_path=law_path,
             policy_path=policy_path,
+            watchman_prompt_path=watchman_prompt_path,
+            failure_policy_path=failure_policy_path,
             runtime_path=runtime_path,
             global_runtime_path=Path.home() / ".config" / "opencontext" / LAW_RUNTIME_FILENAME,
         ),
@@ -1013,6 +1328,8 @@ def setup_opencode(global_install: bool):
                 assets = _ensure_law_assets(force=False)
                 console.print(f"[green]✓ Law file:[/green] {assets.get('law', '')}")
                 console.print(f"[green]✓ Policy file:[/green] {assets.get('policy', '')}")
+                console.print(f"[green]✓ Watchman prompt:[/green] {assets.get('watchman_prompt', '')}")
+                console.print(f"[green]✓ Failure policy:[/green] {assets.get('failure_policy', '')}")
                 console.print(f"[green]✓ Runtime config:[/green] {assets.get('runtime', '')}")
                 console.print(f"[green]✓ Agent guide:[/green] {assets.get('guide', '')}")
             elif not gcc_dir.exists():

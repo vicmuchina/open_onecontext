@@ -49,6 +49,8 @@ Blueprint docs for fast onboarding:
 ├── evolution.yaml              # Project evolution & approach tracking
 ├── law-enforcer.json           # Law Enforcer machine-readable policy
 ├── law-policy.txt              # Editable natural-language law policy
+├── law-watchman-system.txt     # Editable watchman system prompt
+├── law-failure-policy.txt      # Editable failure-lookup classifier policy
 ├── law-runtime.json            # Optional provider key/model overrides
 ├── AGENT_GUIDE.txt             # Generated agent handbook
 ├── law-enforcer-trace.jsonl    # Runtime watchman/violation evidence
@@ -333,12 +335,13 @@ Delete branch (with confirmation):
 opencontext delete experiment-rag-memory
 ```
 
-#### `opencontext law init|validate|status|guide`
+#### `opencontext law init|validate|status|doctor|guide`
 Manage law config and agent docs:
 ```bash
 opencontext law init
 opencontext law validate
 opencontext law status
+opencontext law doctor
 opencontext law guide
 ```
 
@@ -385,6 +388,8 @@ opencontext tui [--theme dark|light]
 
 Companion files:
 - `.GCC/law-policy.txt` (plain-text policy watched by critic/watchman)
+- `.GCC/law-watchman-system.txt` (editable watchman system prompt)
+- `.GCC/law-failure-policy.txt` (editable failure lookup classifier prompt)
 - `.GCC/AGENT_GUIDE.txt` (agent-readable setup + customization handbook)
 
 ### Watchman Trace File
@@ -620,6 +625,8 @@ Primary customization lives in project `.GCC/`:
 
 - `.GCC/law-enforcer.json`: structured settings for deterministic checks, watchman provider, custom rules, and escalation.
 - `.GCC/law-policy.txt`: natural-language laws for watchman judgment.
+- `.GCC/law-watchman-system.txt`: watchman system prompt (dedupe/strictness behavior).
+- `.GCC/law-failure-policy.txt`: failure classification prompt (actionable failure vs environment noise).
 - `.GCC/law-runtime.json`: project provider key/model overrides (optional).
 - `.GCC/AGENT_GUIDE.txt`: generated agent handbook for setup/customization commands.
 
