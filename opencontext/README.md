@@ -24,7 +24,7 @@ opencontext law doctor
 3. To let an AI assistant configure everything for you, tell it to read:
 - `.GCC/AGENT_GUIDE.txt` (main operator guide)
 - `.GCC/law-enforcer.json` (switches/thresholds)
-- `.GCC/law-policy.txt` (plain-language rules)
+- `.GCC/law-policy.txt` (plain-language rules; already includes an active balanced default policy)
 
 ## Overview
 

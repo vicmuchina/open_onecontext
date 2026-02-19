@@ -18,7 +18,7 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 2. `experimental.chat.system.transform`
 - Injects OpenContext law contract into system prompt.
 - Adds GCC branch/last commit summary when available.
-- Injects custom policy text and tool/skill hints from `.GCC/law-policy.txt` + `custom.hints`.
+- Injects policy text (default balanced baseline + user edits) and tool/skill hints from `.GCC/law-policy.txt` + `custom.hints`.
 
 3. `tool.execute.after`
 - Records tool and output in recent evidence.

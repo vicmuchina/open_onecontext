@@ -393,22 +393,33 @@ def _default_law_policy_text() -> str:
 
         Purpose
         - This file is read by the Law Enforcer watchman model every session.
-        - Use it to define workflow laws in plain text without changing plugin code.
+        - This file ships with a default balanced policy so users can run immediately without custom edits.
 
-        Policy Style
-        - Write short, explicit, testable rules.
-        - State when a rule applies and what the agent must do.
-        - Include concrete tool/skill/command names.
+        Default Balanced Policy (active immediately)
+        1) Keep OpenContext initialized for implementation work.
+           - If `.GCC` is missing, initialize before continuing.
+        2) Checkpoint meaningful implementation progress with `opencontext commit`.
+           - Do not let long coding/test/edit loops run without checkpoints.
+        3) Before retrying after actionable failures, consult previous attempts.
+           - Use `opencontext context --search` and/or `opencontext context --log --lines 80`.
+        4) When docs/GitHub/similar-project research changes implementation direction, checkpoint the findings.
+           - Capture external insights so they survive compaction/handoffs.
+        5) Prefer relevant MCP tools/skills/structured retrieval when available.
+           - Avoid brute-force retries when better context/research tools exist.
+        6) For long-running terminal tasks (dev server/watch/repl), use PTY/background tooling.
+           - Avoid blocking shell flows when background execution tools are available.
+        7) After session compaction, recover workflow state before normal work.
+           - Create a checkpoint and retrieve recent context history.
 
-        Example Laws
-        1) If task involves long-running terminal process (dev server/watch/repl), use PTY/background tooling (e.g. pty_spawn) instead of blocking bash.
-        2) If relevant MCP server exists for docs/research, prefer MCP tools before generic search.
-        3) After docs/github research that changes implementation direction, checkpoint with `opencontext commit`.
-        4) Before retrying after failure, run `opencontext context --search` or `--log`.
+        Customization Notes
+        - Keep rules explicit, short, and testable.
+        - Mention concrete tool/skill/command names when needed.
+        - Keep one rule per line or short numbered block.
+        - You can edit this policy any time; changes apply on next watchman checks.
 
         Notes
         - JSON rule config lives in .GCC/law-enforcer.json under `custom.rules`.
-        - This text policy complements JSON rules and can be changed anytime.
+        - This file is the natural-language watchman policy (default + your custom edits).
         """
     ).strip() + "\n"
 
@@ -500,7 +511,7 @@ def _render_agent_guide_text(
         - .GCC/main.md: project goal and milestones.
         - .GCC/branches/*/(commit.md, log.md, metadata.yaml): branch memory artifacts.
         - {law_path}: machine-readable law config (JSON).
-        - {policy_path}: plain-text workflow law document for watchman judgment.
+        - {policy_path}: plain-text workflow law document for watchman judgment (ships with active balanced defaults).
         - {watchman_prompt_path}: editable watchman system prompt (controls judgment style/strictness).
         - {failure_policy_path}: editable failure-lookup classifier policy (actionable vs noise).
         - {research_policy_path}: editable research-capture classifier policy (what must be checkpointed).
@@ -556,7 +567,7 @@ def _render_agent_guide_text(
         4) Custom escalation strategy (section `custom.escalation`)
            - soft_then_hard | hard_only | soft_only.
         5) Natural-language policy updates ({policy_path})
-           - Human-readable law text for watchman.
+           - Human-readable law text for watchman. Starts with default balanced policy; edit as needed.
         6) Watchman system prompt updates ({watchman_prompt_path})
            - Fine-tune watchman behavior (dedupe and strictness policy).
         7) Failure lookup policy updates ({failure_policy_path})
@@ -599,6 +610,8 @@ def _render_agent_guide_text(
           - custom.exemptAgentPatterns includes "plan"/"planner" by default
 
         Recommended Policy Authoring Style ({policy_path})
+        - The file already contains an active balanced baseline policy.
+        - Start by tweaking existing rules instead of rewriting from scratch.
         - Use short, testable rules.
         - Prefer explicit "when X, do Y" format.
         - Mention exact tool/skill/command names.

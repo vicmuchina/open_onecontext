@@ -32,7 +32,7 @@ After this, use `opencode` normally. The law enforcer runs in the background.
 - `SPEC.md` - detailed technical specification and data model.
 - `IMPLEMENTATION.md` - implementation decisions, scope, and behavior guarantees.
 - `.GCC/AGENT_GUIDE.txt` - generated per-project plain-text handbook for coding agents (how to configure laws, prompts, providers, and escalation).
-- `.GCC/law-policy.txt` - editable natural-language law policy consumed by the watchman model.
+- `.GCC/law-policy.txt` - editable natural-language law policy consumed by the watchman model (ships with active balanced defaults).
 - `.GCC/law-watchman-system.txt` - editable watchman system prompt (how strict/when to interrupt).
 - `.GCC/law-failure-policy.txt` - editable failure-debt policy (actionable failure vs setup noise).
 - `.GCC/law-research-policy.txt` - editable research-debt policy (what external findings must be checkpointed).
