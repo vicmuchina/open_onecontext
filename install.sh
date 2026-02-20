@@ -207,6 +207,7 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
   "critic": {
     "apiKey": "",
     "model": "",
+    "modelFallbacks": [],
     "baseUrl": "",
     "endpointPath": "",
     "authHeader": "authorization",
@@ -214,7 +215,8 @@ if [[ "${LOCAL_INSTALL}" == true ]]; then
     "headers": {},
     "request": {},
     "apiKeyEnv": "",
-    "modelEnv": ""
+    "modelEnv": "",
+    "responseFormatStrategy": ""
   }
 }
 JSON
@@ -274,6 +276,7 @@ else
   "critic": {
     "apiKey": "",
     "model": "",
+    "modelFallbacks": [],
     "baseUrl": "",
     "endpointPath": "",
     "authHeader": "authorization",
@@ -281,7 +284,8 @@ else
     "headers": {},
     "request": {},
     "apiKeyEnv": "",
-    "modelEnv": ""
+    "modelEnv": "",
+    "responseFormatStrategy": ""
   }
 }
 JSON

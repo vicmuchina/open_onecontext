@@ -58,8 +58,10 @@ opencontext law guide
   - baseUrl: provider base URL (example: https://llm.chutes.ai/v1)
   - endpointPath: /chat/completions
   - model: provider model id
+  - modelFallbacks: optional ordered fallback model ids
   - apiKeyEnv: env var name holding API key
   - strictJsonRetryAttempts: retries malformed model output in stricter JSON-only mode (recommended: 1)
+  - responseFormatStrategy: json_schema | json_object | json_schema_then_json_object
   - authHeader/apiKeyPrefix/headers: optional custom auth
 
 - Export API key:
@@ -112,6 +114,8 @@ CHUTES_API_KEY="<key>" ~/.local/share/opencontext/scripts/test-opencode-watchman
 - Formatted watchman request/response:
   - opencontext law watch -n 20
   - opencontext law watch --follow
+- JSON model benchmark (all Chutes models):
+  - CHUTES_API_KEY="<key>" python3 ~/.local/share/opencontext/scripts/chutes_json_benchmark.py --response-format json_object --top 20
 
 If any test fails
 - Re-copy plugin from source to ~/.config/opencode/plugins/opencontext-reminder.js

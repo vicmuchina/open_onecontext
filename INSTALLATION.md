@@ -155,8 +155,8 @@ Configure watchman API key for model-based law inspection:
 
 ```bash
 export CHUTES_API_KEY="<your_api_key>"
-# Optional model override (default is zai-org/GLM-4.7-Flash)
-export OPENCONTEXT_LAW_MODEL_ID="zai-org/GLM-4.7-Flash"
+# Optional model override (default is chutesai/Mistral-Small-3.2-24B-Instruct-2506)
+export OPENCONTEXT_LAW_MODEL_ID="chutesai/Mistral-Small-3.2-24B-Instruct-2506"
 ```
 
 Set once using config files (no repeated `export`):
@@ -176,13 +176,15 @@ You can also edit `.GCC/law-enforcer.json` for any OpenAI-compatible provider:
     "headers": {},
     "request": {},
     "model": "<provider_model_id>",
+    "modelFallbacks": ["<fallback_1>", "<fallback_2>"],
     "apiKeyEnv": "CHUTES_API_KEY",
-    "strictJsonRetryAttempts": 1
+    "strictJsonRetryAttempts": 1,
+    "responseFormatStrategy": "json_schema_then_json_object"
   }
 }
 ```
 
-The plugin sends `response_format.type=json_schema`.
+The plugin starts with `response_format.type=json_schema`, then can fall back to `json_object` based on `critic.responseFormatStrategy`.
 If output is malformed, it retries in stricter JSON-only mode, then skips enforcement if still invalid.
 
 Watchman trace logs are written to:
@@ -196,6 +198,13 @@ Use the built-in formatted watcher (short command):
 ```bash
 opencontext law watch -n 20
 opencontext law watch --follow
+```
+
+Benchmark Chutes models for structured JSON reliability + TPS:
+
+```bash
+export CHUTES_API_KEY="<your_api_key>"
+python3 scripts/chutes_json_benchmark.py --response-format json_object --top 20
 ```
 
 Agent-facing handbook and editable policy live in:

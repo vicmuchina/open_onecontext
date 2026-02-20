@@ -19,8 +19,18 @@ opencontext law doctor
 3. For AI-assisted configuration, point your assistant to:
 - `.GCC/AGENT_GUIDE.txt` (primary setup/customization guide)
 - then `.GCC/law-enforcer.json` + `.GCC/law-policy.txt` for your custom behavior
+4. Watch live watchman I/O (useful for debugging immediately):
+```bash
+opencontext law watch --follow
+```
 
 After this, use `opencode` normally. The law enforcer runs in the background.
+
+Optional: benchmark Chutes model JSON reliability + speed:
+```bash
+export CHUTES_API_KEY="<your_api_key>"
+python3 scripts/chutes_json_benchmark.py --response-format json_object --top 15
+```
 
 ## Documentation Map
 
@@ -41,6 +51,7 @@ After this, use `opencode` normally. The law enforcer runs in the background.
 - `opencontext/TEST_RESULTS.md` - recorded test runs and verification snapshots.
 - `opencontext/docs/SKILL.md` - OpenCode skill instructions for using OpenContext in agent sessions.
 - `opencontext/docs/papers/GCC_Paper_2508.00031.md` - local copy/notes of the GCC paper reference.
+- `scripts/chutes_json_benchmark.py` - benchmark JSON compliance + tokens/sec across Chutes models.
 
 Quick install:
 

@@ -8,6 +8,12 @@ Companion docs:
 - `HOOKS_AND_ENFORCEMENT.md`
 - `AGENT_WORKFLOW.md`
 
+External references for structured JSON behavior:
+- Chutes docs: https://docs.chutes.ai/
+- vLLM structured output reliability threads:
+  - https://github.com/vllm-project/vllm/issues/7656
+  - https://github.com/vllm-project/vllm/issues/11828
+
 ## Current Implementation Target (Active)
 
 This file now tracks the active upgrade work. If session is interrupted, continue from this section.
@@ -151,7 +157,8 @@ Default:
 - Provider style: OpenAI-compatible
 - Endpoint: `https://llm.chutes.ai/v1`
 - Path: `/chat/completions`
-- Model: `zai-org/GLM-4.7-Flash`
+- Primary model: `chutesai/Mistral-Small-3.2-24B-Instruct-2506`
+- Default fallbacks: `NousResearch/Hermes-4-14B`, `zai-org/GLM-4.6-FP8`, `deepseek-ai/DeepSeek-V3-0324-TEE`
 - API key env (default): `CHUTES_API_KEY` (fallback: `OPENCONTEXT_LAW_API_KEY`)
 - Optional model override env: `OPENCONTEXT_LAW_MODEL_ID`
 

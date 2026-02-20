@@ -42,6 +42,7 @@ writeFileSync(
       authHeader: "authorization",
       apiKeyPrefix: "Bearer",
       model: "zai-org/GLM-4.7-Flash",
+      modelFallbacks: [],
       apiKeyEnv: "CHUTES_API_KEY",
       timeoutMs: 3000,
       maxTokensWatchman: 200,
@@ -112,8 +113,10 @@ const oldFetch = global.fetch;
 const oldApiKey = process.env.CHUTES_API_KEY;
 process.env.CHUTES_API_KEY = "test-key";
 let fetchCalls = 0;
-global.fetch = async () => {
+const requestBodies = [];
+global.fetch = async (_url, options = {}) => {
   fetchCalls += 1;
+  requestBodies.push(JSON.parse(String(options.body || "{}")));
   return ({
   ok: true,
   json: async () => ({
@@ -172,8 +175,16 @@ try {
     console.error("FAIL  malformed output did not surface parse_invalid_* source");
     process.exit(1);
   }
-  if (fetchCalls !== 2) {
-    console.error(`FAIL  expected strict retry fetch count=2, got ${fetchCalls}`);
+  if (fetchCalls !== 4) {
+    console.error(`FAIL  expected strict retry+format fallback fetch count=4, got ${fetchCalls}`);
+    process.exit(1);
+  }
+  if (requestBodies[0]?.response_format?.type !== "json_schema") {
+    console.error("FAIL  first malformed retry should start with json_schema");
+    process.exit(1);
+  }
+  if (!requestBodies.some((body) => body?.response_format?.type === "json_object")) {
+    console.error("FAIL  expected fallback attempt with response_format=json_object");
     process.exit(1);
   }
 

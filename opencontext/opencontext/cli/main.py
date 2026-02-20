@@ -394,6 +394,7 @@ def _default_law_runtime_config() -> Dict:
         "critic": {
             "apiKey": "",
             "model": "",
+            "modelFallbacks": [],
             "baseUrl": "",
             "endpointPath": "",
             "authHeader": "authorization",
@@ -402,6 +403,7 @@ def _default_law_runtime_config() -> Dict:
             "request": {},
             "apiKeyEnv": "",
             "modelEnv": "",
+            "responseFormatStrategy": "",
         }
     }
 
@@ -565,7 +567,7 @@ def _render_agent_guide_text(
         - Debt state (checkpoint/research/failure/mcp).
         - Per-rule custom violation counters.
 
-        What Watchman Must Return (strict JSON schema)
+        What Watchman Must Return (strict structured JSON)
         - violation: boolean
         - rule: string
         - reason: string
@@ -573,13 +575,13 @@ def _render_agent_guide_text(
         - confidence: number
 
         Malformed Output Handling
-        - The plugin requests strict JSON schema output.
-        - If malformed, it retries with stricter instruction (`strictJsonRetryAttempts`).
+        - The plugin requests structured JSON output (default `json_schema`, optional `json_object` fallback).
+        - If malformed, it retries with stricter instruction (`strictJsonRetryAttempts`) and can fall back by `critic.responseFormatStrategy`.
         - If still malformed, it logs and skips interruption (no broken prompt injection).
 
         Main Customization Paths (No Plugin Code Changes)
         1) Provider + model config (in {law_path}, section `critic`)
-           - baseUrl, endpointPath, authHeader, apiKeyPrefix, headers, request, model, apiKeyEnv, modelEnv.
+           - baseUrl, endpointPath, authHeader, apiKeyPrefix, headers, request, model, modelFallbacks, apiKeyEnv, modelEnv, responseFormatStrategy.
         1b) Provider key/model without re-exporting env vars:
            - set `critic.apiKey` / `critic.model` in {runtime_path} (project),
              or in {global_runtime_path} (global).
@@ -958,6 +960,18 @@ def _validate_law_content(law: Dict) -> List[str]:
             errors.append("critic.headers must be an object/mapping.")
         if "request" in critic and not isinstance(critic.get("request"), dict):
             errors.append("critic.request must be an object/mapping.")
+        if "modelFallbacks" in critic:
+            value = critic.get("modelFallbacks")
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                errors.append("critic.modelFallbacks must be a list of strings.")
+        if "responseFormatStrategy" in critic:
+            value = critic.get("responseFormatStrategy")
+            allowed = {"json_schema", "json_object", "json_schema_then_json_object"}
+            if not isinstance(value, str) or value not in allowed:
+                errors.append(
+                    "critic.responseFormatStrategy must be one of: "
+                    "json_schema, json_object, json_schema_then_json_object."
+                )
         if "strictJsonRetryAttempts" in critic:
             value = critic.get("strictJsonRetryAttempts")
             if not isinstance(value, (int, float)) or value < 0:
@@ -1249,6 +1263,8 @@ def law_status(law_path_opt: Optional[Path]):
     failure_classifier_model_only = law_data.get("gcc", {}).get("failureClassifierRequireModelDecision", "unknown")
     critic_enabled = law_data.get("critic", {}).get("enabled", "unknown")
     critic_model = law_data.get("critic", {}).get("model", "unknown")
+    critic_fallbacks = law_data.get("critic", {}).get("modelFallbacks", [])
+    critic_response_strategy = law_data.get("critic", {}).get("responseFormatStrategy", "json_schema_then_json_object")
     critic_base = law_data.get("critic", {}).get("baseUrl", "unknown")
     critic_path = law_data.get("critic", {}).get("endpointPath", "unknown")
     watchman_enabled = law_data.get("watchman", {}).get("enabled", "unknown")
@@ -1283,6 +1299,8 @@ def law_status(law_path_opt: Optional[Path]):
         f"Failure classifier require model decision: {failure_classifier_model_only}\n"
         f"Critic enabled: {critic_enabled}\n"
         f"Critic model: {critic_model}\n"
+        f"Critic fallbacks: {', '.join(critic_fallbacks) if isinstance(critic_fallbacks, list) and critic_fallbacks else 'none'}\n"
+        f"Critic response format strategy: {critic_response_strategy}\n"
         f"Critic endpoint: {critic_base}{critic_path}\n"
         f"Watchman enabled: {watchman_enabled}\n"
         f"Watch assistant turns: {watchman_turns}\n"

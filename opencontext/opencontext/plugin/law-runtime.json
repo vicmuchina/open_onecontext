@@ -2,6 +2,7 @@
   "critic": {
     "apiKey": "",
     "model": "",
+    "modelFallbacks": [],
     "baseUrl": "",
     "endpointPath": "",
     "authHeader": "authorization",
@@ -9,6 +10,7 @@
     "headers": {},
     "request": {},
     "apiKeyEnv": "",
-    "modelEnv": ""
+    "modelEnv": "",
+    "responseFormatStrategy": ""
   }
 }

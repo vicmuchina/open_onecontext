@@ -84,10 +84,16 @@ opencontext law watch --follow
 opencontext law status
 opencontext law doctor
 ```
+- Benchmark Chutes JSON behavior/speed when tuning model choice:
+```bash
+CHUTES_API_KEY="<key>" python3 scripts/chutes_json_benchmark.py --response-format json_object --top 20
+```
 
 ## Tune Provider or Behavior
 Edit `.GCC/law-enforcer.json`:
 - Provider endpoint/model/auth (`critic.*`)
+- Fallback model chain (`critic.modelFallbacks`)
+- Response format strategy (`critic.responseFormatStrategy`: `json_schema`, `json_object`, or `json_schema_then_json_object`)
 - Strict retry count (`critic.strictJsonRetryAttempts`)
 - Planning guards (`gcc.skipCheckpointDuringPlanningAgent`, `watchman.skipDuringPlanningAgent`)
 - Custom rules (`custom.rules`) and escalation (`custom.escalation`)

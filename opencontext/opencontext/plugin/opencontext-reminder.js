@@ -74,13 +74,19 @@ const DEFAULT_LAW = {
     apiKeyPrefix: "Bearer",
     headers: {},
     request: {},
-    model: "zai-org/GLM-4.7-Flash",
+    model: "chutesai/Mistral-Small-3.2-24B-Instruct-2506",
+    modelFallbacks: [
+      "NousResearch/Hermes-4-14B",
+      "zai-org/GLM-4.6-FP8",
+      "deepseek-ai/DeepSeek-V3-0324-TEE",
+    ],
     apiKeyEnv: "CHUTES_API_KEY",
     modelEnv: "OPENCONTEXT_LAW_MODEL_ID",
     timeoutMs: 8000,
     maxTokensCritic: 120,
     maxTokensWatchman: 320,
     strictJsonRetryAttempts: 2,
+    responseFormatStrategy: "json_schema_then_json_object",
   },
   watchman: {
     enabled: true,
@@ -675,6 +681,30 @@ function sanitizeLaw(law) {
   if (!sanitized.critic.model || typeof sanitized.critic.model !== "string") {
     sanitized.critic.model = DEFAULT_LAW.critic.model;
   }
+  sanitized.critic.model = sanitized.critic.model.trim() || DEFAULT_LAW.critic.model;
+  const fallbackModels = normalizeStringArray(
+    sanitized.critic.modelFallbacks,
+    DEFAULT_LAW.critic.modelFallbacks
+  );
+  const seenModels = new Set([sanitized.critic.model]);
+  sanitized.critic.modelFallbacks = [];
+  for (const candidate of fallbackModels) {
+    const value = String(candidate || "").trim();
+    if (!value || seenModels.has(value)) continue;
+    seenModels.add(value);
+    sanitized.critic.modelFallbacks.push(value);
+  }
+  const allowedResponseFormats = new Set([
+    "json_schema",
+    "json_object",
+    "json_schema_then_json_object",
+  ]);
+  const strategy = String(
+    sanitized.critic.responseFormatStrategy || DEFAULT_LAW.critic.responseFormatStrategy
+  ).trim().toLowerCase();
+  sanitized.critic.responseFormatStrategy = allowedResponseFormats.has(strategy)
+    ? strategy
+    : DEFAULT_LAW.critic.responseFormatStrategy;
   sanitized.watchman.enabled = sanitized.watchman.enabled !== false;
   sanitized.watchman.inspectAssistantTurns = sanitized.watchman.inspectAssistantTurns !== false;
   sanitized.watchman.inspectToolCalls = sanitized.watchman.inspectToolCalls !== false;
@@ -872,6 +902,8 @@ function sanitizeRuntimeCritic(runtimeRaw) {
     "request",
     "apiKeyEnv",
     "modelEnv",
+    "modelFallbacks",
+    "responseFormatStrategy",
     "timeoutMs",
     "maxTokensCritic",
     "maxTokensWatchman",
@@ -902,6 +934,15 @@ function sanitizeRuntimeCritic(runtimeRaw) {
       Object.keys(value).length === 0 &&
       ["headers", "request"].includes(key)
     ) {
+      continue;
+    }
+    if (key === "modelFallbacks") {
+      if (!Array.isArray(value) || value.length === 0) continue;
+      const normalized = value
+        .map((item) => String(item || "").trim())
+        .filter(Boolean);
+      if (normalized.length === 0) continue;
+      out[key] = normalized;
       continue;
     }
     out[key] = value;
@@ -2023,11 +2064,42 @@ function resolveCriticApiKey(law) {
 }
 
 function resolveCriticModel(law) {
+  return resolveCriticModelCandidates(law)[0] || DEFAULT_LAW.critic.model;
+}
+
+function resolveCriticModelCandidates(law) {
   const modelEnv = typeof law?.critic?.modelEnv === "string" ? law.critic.modelEnv.trim() : "";
+  const models = [];
   if (modelEnv && process.env[modelEnv]?.trim()) {
-    return process.env[modelEnv].trim();
+    models.push(process.env[modelEnv].trim());
   }
-  return law?.critic?.model || DEFAULT_LAW.critic.model;
+  const configuredPrimary = String(law?.critic?.model || DEFAULT_LAW.critic.model).trim();
+  if (configuredPrimary) models.push(configuredPrimary);
+  const fallbackList = normalizeStringArray(
+    law?.critic?.modelFallbacks,
+    DEFAULT_LAW.critic.modelFallbacks
+  );
+  for (const fallback of fallbackList) {
+    const value = String(fallback || "").trim();
+    if (value) models.push(value);
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const value of models) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    deduped.push(value);
+  }
+  return deduped.length > 0 ? deduped : [DEFAULT_LAW.critic.model];
+}
+
+function resolveCriticResponseFormatPlan(law) {
+  const strategy = String(
+    law?.critic?.responseFormatStrategy || DEFAULT_LAW.critic.responseFormatStrategy
+  ).trim().toLowerCase();
+  if (strategy === "json_object") return ["json_object"];
+  if (strategy === "json_schema") return ["json_schema"];
+  return ["json_schema", "json_object"];
 }
 
 function resolveCriticEndpoint(law) {
@@ -2067,6 +2139,10 @@ function buildStructuredResponseFormat(schemaName, schema) {
       schema,
     },
   };
+}
+
+function buildJsonObjectResponseFormat() {
+  return { type: "json_object" };
 }
 
 function tryParseJsonObject(value) {
@@ -2194,17 +2270,28 @@ function extractStructuredObjectFromCompletion(data) {
   return null;
 }
 
-function buildLawModelRequest({ law, model, messages, maxTokens, schemaName, schema }) {
+function buildLawModelRequest({
+  law,
+  model,
+  messages,
+  maxTokens,
+  schemaName,
+  schema,
+  responseFormatType = "json_schema",
+}) {
   const requestOverrides = law?.critic?.request && typeof law.critic.request === "object"
     ? law.critic.request
     : {};
+  const responseFormat = responseFormatType === "json_object"
+    ? buildJsonObjectResponseFormat()
+    : buildStructuredResponseFormat(schemaName, schema);
   const body = {
     ...requestOverrides,
     model,
     messages,
     temperature: 0,
     max_tokens: maxTokens,
-    response_format: buildStructuredResponseFormat(schemaName, schema),
+    response_format: responseFormat,
   };
   return body;
 }
@@ -2263,6 +2350,7 @@ async function requestStructuredVerdict({
   law,
   apiKey,
   model,
+  models,
   timeoutMs,
   schemaName,
   schema,
@@ -2271,70 +2359,92 @@ async function requestStructuredVerdict({
   isValidParsed,
 }) {
   const retries = Math.max(0, Number(law?.critic?.strictJsonRetryAttempts || 0));
+  const modelCandidates = Array.isArray(models) && models.length > 0
+    ? models
+    : [model || resolveCriticModel(law)];
+  const responseFormats = resolveCriticResponseFormatPlan(law);
+  let totalAttempts = 0;
   let lastFailure = null;
 
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const attemptMessages = attempt === 0
-      ? messages
-      : withStrictRetrySystemMessage(messages, schemaName);
-    const result = await callLawModel({
-      law,
-      apiKey,
-      model,
-      timeoutMs,
-      body: buildLawModelRequest({
-        law,
-        model,
-        messages: attemptMessages,
-        maxTokens,
-        schemaName,
-        schema,
-      }),
-    });
+  for (const modelCandidate of modelCandidates) {
+    for (const responseFormatType of responseFormats) {
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        const attemptMessages = attempt === 0
+          ? messages
+          : withStrictRetrySystemMessage(messages, schemaName);
+        totalAttempts += 1;
+        const result = await callLawModel({
+          law,
+          apiKey,
+          model: modelCandidate,
+          timeoutMs,
+          body: buildLawModelRequest({
+            law,
+            model: modelCandidate,
+            messages: attemptMessages,
+            maxTokens,
+            schemaName,
+            schema,
+            responseFormatType,
+          }),
+        });
 
-    if (!result.ok) {
-      return {
-        ok: false,
-        source: "http_error",
-        status: result.status,
-        raw: result.raw,
-        attempts: attempt + 1,
-      };
+        if (!result.ok) {
+          lastFailure = {
+            ok: false,
+            source: "http_error",
+            status: result.status,
+            raw: result.raw,
+            attempts: totalAttempts,
+            model: modelCandidate,
+            responseFormat: responseFormatType,
+          };
+          break;
+        }
+
+        if (!result.parsed) {
+          lastFailure = {
+            ok: false,
+            source: "parse_invalid_json",
+            raw: result.raw,
+            attempts: totalAttempts,
+            model: modelCandidate,
+            responseFormat: responseFormatType,
+          };
+          continue;
+        }
+
+        if (!isValidParsed(result.parsed)) {
+          lastFailure = {
+            ok: false,
+            source: "parse_invalid_shape",
+            raw: clipText(safeJsonString(result.parsed), 500),
+            attempts: totalAttempts,
+            model: modelCandidate,
+            responseFormat: responseFormatType,
+          };
+          continue;
+        }
+
+        return {
+          ok: true,
+          parsed: result.parsed,
+          raw: result.raw,
+          attempts: totalAttempts,
+          modelUsed: modelCandidate,
+          responseFormat: responseFormatType,
+        };
+      }
     }
-
-    if (!result.parsed) {
-      lastFailure = {
-        ok: false,
-        source: "parse_invalid_json",
-        raw: result.raw,
-        attempts: attempt + 1,
-      };
-      continue;
-    }
-
-    if (!isValidParsed(result.parsed)) {
-      lastFailure = {
-        ok: false,
-        source: "parse_invalid_shape",
-        raw: clipText(safeJsonString(result.parsed), 500),
-        attempts: attempt + 1,
-      };
-      continue;
-    }
-
-    return {
-      ok: true,
-      parsed: result.parsed,
-      raw: result.raw,
-      attempts: attempt + 1,
-    };
   }
 
   return lastFailure || {
     ok: false,
     source: "parse_invalid_json",
     raw: "",
-    attempts: retries + 1,
+    attempts: Math.max(1, totalAttempts),
+    model: modelCandidates[0],
+    responseFormat: responseFormats[0],
   };
 }
 
@@ -2373,13 +2483,15 @@ async function runCriticCheck(client, law, payload) {
   if (!law.critic.enabled) return { enforce: true, source: "disabled" };
   const { apiKey, sourceEnv } = resolveCriticApiKey(law);
   if (!apiKey) return { enforce: true, source: "no_api_key" };
-  const model = resolveCriticModel(law);
+  const models = resolveCriticModelCandidates(law);
+  const primaryModel = models[0];
 
   try {
     const result = await requestStructuredVerdict({
       law,
       apiKey,
-      model,
+      model: primaryModel,
+      models,
       timeoutMs: law.critic.timeoutMs || 3500,
       schemaName: "opencontext_critic",
       schema: CRITIC_RESPONSE_SCHEMA,
@@ -2405,6 +2517,7 @@ async function runCriticCheck(client, law, payload) {
         raw: result.raw,
         apiKeyEnv: sourceEnv,
         attempts: result.attempts || 1,
+        model: result.model || primaryModel,
       };
     }
     const parsed = result.parsed;
@@ -2414,6 +2527,7 @@ async function runCriticCheck(client, law, payload) {
       source: "critic",
       reason: parsed?.reason || "",
       attempts: result.attempts || 1,
+      model: result.modelUsed || primaryModel,
     };
   } catch (error) {
     return {
@@ -2437,13 +2551,15 @@ async function runFailureLookupClassifier(client, law, payload) {
   if (!apiKey) {
     return { available: false, requireLookup: false, source: "no_api_key" };
   }
-  const model = resolveCriticModel(law);
+  const models = resolveCriticModelCandidates(law);
+  const primaryModel = models[0];
 
   try {
     const result = await requestStructuredVerdict({
       law,
       apiKey,
-      model,
+      model: primaryModel,
+      models,
       timeoutMs: law.critic.timeoutMs || 8000,
       schemaName: "opencontext_failure_lookup",
       schema: FAILURE_LOOKUP_RESPONSE_SCHEMA,
@@ -2472,7 +2588,8 @@ async function runFailureLookupClassifier(client, law, payload) {
         status: result.status,
         error: result.raw,
         attempts: result.attempts || 1,
-        model,
+        model: result.model || primaryModel,
+        responseFormat: result.responseFormat || "",
         apiKeyEnv: sourceEnv,
       };
     }
@@ -2487,7 +2604,8 @@ async function runFailureLookupClassifier(client, law, payload) {
       reason: clipText(parsed?.reason || "", 300),
       confidence: Number.isFinite(confidence) ? confidence : 0,
       threshold: minConfidence,
-      model,
+      model: result.modelUsed || primaryModel,
+      responseFormat: result.responseFormat || "",
       apiKeyEnv: sourceEnv,
       attempts: result.attempts || 1,
     };
@@ -2497,7 +2615,7 @@ async function runFailureLookupClassifier(client, law, payload) {
       requireLookup: false,
       source: "failure_classifier_error",
       error: error?.message ?? String(error),
-      model,
+      model: primaryModel,
       apiKeyEnv: sourceEnv,
     };
   }
@@ -2515,13 +2633,15 @@ async function runResearchCaptureClassifier(client, law, payload) {
   if (!apiKey) {
     return { available: false, requireCapture: false, source: "no_api_key" };
   }
-  const model = resolveCriticModel(law);
+  const models = resolveCriticModelCandidates(law);
+  const primaryModel = models[0];
 
   try {
     const result = await requestStructuredVerdict({
       law,
       apiKey,
-      model,
+      model: primaryModel,
+      models,
       timeoutMs: law.critic.timeoutMs || 8000,
       schemaName: "opencontext_research_capture",
       schema: RESEARCH_CAPTURE_RESPONSE_SCHEMA,
@@ -2550,7 +2670,8 @@ async function runResearchCaptureClassifier(client, law, payload) {
         status: result.status,
         error: result.raw,
         attempts: result.attempts || 1,
-        model,
+        model: result.model || primaryModel,
+        responseFormat: result.responseFormat || "",
         apiKeyEnv: sourceEnv,
       };
     }
@@ -2565,7 +2686,8 @@ async function runResearchCaptureClassifier(client, law, payload) {
       reason: clipText(parsed?.reason || "", 300),
       confidence: Number.isFinite(confidence) ? confidence : 0,
       threshold: minConfidence,
-      model,
+      model: result.modelUsed || primaryModel,
+      responseFormat: result.responseFormat || "",
       apiKeyEnv: sourceEnv,
       attempts: result.attempts || 1,
     };
@@ -2575,7 +2697,7 @@ async function runResearchCaptureClassifier(client, law, payload) {
       requireCapture: false,
       source: "research_classifier_error",
       error: error?.message ?? String(error),
-      model,
+      model: primaryModel,
       apiKeyEnv: sourceEnv,
     };
   }
@@ -2593,13 +2715,15 @@ async function runWatchmanCheck(client, law, payload) {
   if (!apiKey) {
     return { available: false, violation: false, source: "no_api_key" };
   }
-  const model = resolveCriticModel(law);
+  const models = resolveCriticModelCandidates(law);
+  const primaryModel = models[0];
 
   try {
     const result = await requestStructuredVerdict({
       law,
       apiKey,
-      model,
+      model: primaryModel,
+      models,
       timeoutMs: law.critic.timeoutMs || 8000,
       schemaName: "opencontext_watchman",
       schema: WATCHMAN_RESPONSE_SCHEMA,
@@ -2625,7 +2749,8 @@ async function runWatchmanCheck(client, law, payload) {
         status: result.status,
         error: result.raw,
         apiKeyEnv: sourceEnv,
-        model,
+        model: result.model || primaryModel,
+        responseFormat: result.responseFormat || "",
         attempts: result.attempts || 1,
       };
     }
@@ -2643,7 +2768,8 @@ async function runWatchmanCheck(client, law, payload) {
       reason,
       correctionPrompt,
       confidence: Number.isFinite(confidence) ? confidence : 0,
-      model,
+      model: result.modelUsed || primaryModel,
+      responseFormat: result.responseFormat || "",
       apiKeyEnv: sourceEnv,
       attempts: result.attempts || 1,
     };
@@ -2654,7 +2780,7 @@ async function runWatchmanCheck(client, law, payload) {
       source: "watchman_error",
       error: error?.message ?? String(error),
       apiKeyEnv: sourceEnv,
-      model,
+      model: primaryModel,
     };
   }
 }
@@ -3080,6 +3206,7 @@ async function evaluateAndEnforce({
       sessionId: state.sessionId,
       trigger,
       model: resolveCriticModel(law),
+      modelCandidates: resolveCriticModelCandidates(law),
       evidence: {
         latestAssistant,
         recentMessages: evidence.recentMessages,
@@ -3114,6 +3241,7 @@ async function evaluateAndEnforce({
       rule: verdict.rule || "",
       confidence: verdict.confidence ?? 0,
       model: verdict.model || resolveCriticModel(law),
+      responseFormat: verdict.responseFormat || "",
       apiKeyEnv: verdict.apiKeyEnv || "",
       status: verdict.status || 0,
       error: verdict.error || "",

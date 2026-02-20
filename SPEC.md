@@ -13,6 +13,13 @@ Blueprint docs for fast onboarding:
 - `HOOKS_AND_ENFORCEMENT.md`
 - `AGENT_WORKFLOW.md`
 
+JSON reliability references used by this project:
+- Chutes docs: https://docs.chutes.ai/
+- Chutes API endpoint behavior (OpenAI-compatible): https://docs.chutes.ai/reference/llm
+- vLLM structured output reliability discussions:
+  - https://github.com/vllm-project/vllm/issues/7656
+  - https://github.com/vllm-project/vllm/issues/11828
+
 ---
 
 ## In-Progress Upgrade (Decision-Locked)
@@ -471,7 +478,7 @@ On assistant completion, the plugin collects:
 - custom rule counters + custom hints
 - plain-text law policy and optional agent guide excerpt
 
-That evidence is sent to the configured critic/watchman model through OpenAI-compatible `chat/completions` using `response_format.type=json_schema`.
+That evidence is sent to the configured critic/watchman model through OpenAI-compatible `chat/completions` using structured `response_format` (default `json_schema`, with optional fallback to `json_object`).
 Required watchman fields:
 - `violation` (true/false)
 - `rule`

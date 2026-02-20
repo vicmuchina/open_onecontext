@@ -66,7 +66,7 @@ What OpenContext + Law Enforcer changes:
 - Continuous Law Enforcer checks (GCC/MCP/research)
 - Per-assistant-turn watchman inspection using session transcript + tool traces
 - In-session interruption prompts on workflow violations (AI-generated correction prompt)
-- Strict JSON-schema watchman/critic parsing (no free-text fallback interruption)
+- Structured watchman/critic parsing (`json_schema` with configurable `json_object` fallback; no free-text interruption)
 - Model-judged failure lookup classification (actionable failure vs setup/CLI noise)
 - Model-judged research capture classification (checkpoint-worthy insight vs routine exploration)
 - Optional model-only gates (`gcc.failureClassifierRequireModelDecision`, `research.captureClassifierRequireModelDecision`, `watchman.requireModelDecision`)
@@ -246,6 +246,9 @@ node ./scripts/test-opencode-plugin-failure-debt-filter.mjs
 # Run live watchman trace test (requires CHUTES_API_KEY)
 CHUTES_API_KEY=... ./scripts/test-opencode-watchman-trace-live.sh
 
+# Benchmark all Chutes models for JSON compliance + speed (watchman-style tasks)
+CHUTES_API_KEY=... python3 ./scripts/chutes_json_benchmark.py --response-format json_object --top 20
+
 # Manual debug logs
 opencode --print-logs --log-level DEBUG run "plugin smoke test"
 ```
@@ -307,7 +310,7 @@ Configure critic/watchman provider (OpenAI-compatible):
 ```bash
 export CHUTES_API_KEY="<your_api_key>"
 # Optional model override without editing law file
-export OPENCONTEXT_LAW_MODEL_ID="zai-org/GLM-4.7-Flash"
+export OPENCONTEXT_LAW_MODEL_ID="chutesai/Mistral-Small-3.2-24B-Instruct-2506"
 ```
 
 No-repeat key setup:
@@ -327,9 +330,11 @@ Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but yo
     "headers": {},
     "request": {},
     "model": "<provider_model_id>",
+    "modelFallbacks": ["<fallback_model_id_1>", "<fallback_model_id_2>"],
     "apiKeyEnv": "CHUTES_API_KEY",
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
-    "strictJsonRetryAttempts": 2
+    "strictJsonRetryAttempts": 2,
+    "responseFormatStrategy": "json_schema_then_json_object"
   }
 }
 ```
@@ -337,7 +342,7 @@ Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but yo
 Notes:
 - `apiKeyEnv` is the env var name used at runtime.
 - If your provider does not use `Authorization: Bearer`, change `authHeader` and `apiKeyPrefix`.
-- The plugin always sends `response_format: { type: "json_schema", ... }`.
+- The plugin starts with `response_format: { type: "json_schema", ... }` and can fall back to `{ type: "json_object" }` when configured.
 - If provider output is malformed, it retries in stricter JSON-only mode (`critic.strictJsonRetryAttempts`) before skipping enforcement.
 - Hard deterministic invariants remain active even when model output is malformed; policy-level checks can stay model-only based on your `*RequireModelDecision` settings.
 
@@ -724,7 +729,7 @@ The OpenCode plugin hooks into OpenCode's event system:
 
 ### Watchman Response Contract
 - Provider API: OpenAI-compatible `POST /chat/completions`
-- Request includes `response_format.type = json_schema`
+- Request uses structured `response_format` (default `json_schema`, optional fallback `json_object`)
 - Required output fields: `violation`, `rule`, `reason`, `correction_prompt`, `confidence`
 - Malformed/free-text responses trigger strict retry first, then are logged as parse errors if still invalid
 
@@ -768,6 +773,8 @@ The OpenContext plugin reads this runtime environment and project `.GCC` law fil
 - Supports:
   - `critic.apiKey`
   - `critic.model`
+  - `critic.modelFallbacks`
+  - `critic.responseFormatStrategy`
   - optional provider fields (`baseUrl`, `endpointPath`, `authHeader`, etc.)
 - Precedence:
   1. environment variables
@@ -780,7 +787,8 @@ Example `law-runtime.json`:
 {
   "critic": {
     "apiKey": "cpk_...",
-    "model": "zai-org/GLM-4.7-Flash",
+    "model": "chutesai/Mistral-Small-3.2-24B-Instruct-2506",
+    "modelFallbacks": ["NousResearch/Hermes-4-14B", "zai-org/GLM-4.6-FP8"],
     "baseUrl": "https://llm.chutes.ai/v1",
     "endpointPath": "/chat/completions"
   }
@@ -817,10 +825,12 @@ Example `law-runtime.json`:
     "apiKeyPrefix": "Bearer",
     "headers": {},
     "request": {},
-    "model": "zai-org/GLM-4.7-Flash",
+    "model": "chutesai/Mistral-Small-3.2-24B-Instruct-2506",
+    "modelFallbacks": ["NousResearch/Hermes-4-14B", "zai-org/GLM-4.6-FP8", "deepseek-ai/DeepSeek-V3-0324-TEE"],
     "apiKeyEnv": "CHUTES_API_KEY",
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
-    "strictJsonRetryAttempts": 2
+    "strictJsonRetryAttempts": 2,
+    "responseFormatStrategy": "json_schema_then_json_object"
   },
   "watchman": {
     "enabled": true,
@@ -960,7 +970,7 @@ opencontext merge experiment-caching
    opencontext law watch -n 20
    opencontext law watch --follow
    ```
-3. Confirm provider returns valid JSON-schema output for watchman fields:
+3. Confirm provider returns valid structured JSON output for watchman fields:
    - `violation`
    - `rule`
    - `reason`
