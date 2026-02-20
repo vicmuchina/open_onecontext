@@ -7,11 +7,11 @@ limits:
   maxConsecutiveInjections: 4
 gcc:
   requireInit: true
-  requireCheckpointEveryTools: 6
+  requireCheckpointEveryTools: 10
   requireFailedAttemptLookup: true
   failureLookupPolicyFile: law-failure-policy.txt
   failureClassifierEnabled: true
-  failureClassifierMinConfidence: 0.55
+  failureClassifierMinConfidence: 0.7
   failureClassifierRequireModelDecision: true
   compactionCheckpointRequired: true
   skipCheckpointDuringPlanningAgent: true
@@ -19,12 +19,12 @@ gcc:
 mcp:
   requireAwarenessAtSessionStart: true
   requireUseWhenRelevant: true
-  usageReminderEveryTools: 4
+  usageReminderEveryTools: 8
 research:
   requireCaptureOnDocsOrGithub: true
   capturePolicyFile: law-research-policy.txt
   captureClassifierEnabled: true
-  captureClassifierMinConfidence: 0.55
+  captureClassifierMinConfidence: 0.7
   captureClassifierRequireModelDecision: true
   docsKeywords: [docs, readme, documentation, arxiv.org]
 critic:
@@ -51,12 +51,12 @@ critic:
 watchman:
   enabled: true
   inspectAssistantTurns: true
-  inspectToolCalls: true
+  inspectToolCalls: false
   inspectCompaction: true
-  inspectOnIdle: true
+  inspectOnIdle: false
   skipDuringPlanningAgent: true
   dedupeSameViolationUntilResolved: true
-  minConfidence: 0.65
+  minConfidence: 0.75
   requireModelDecision: true
   systemPromptFile: law-watchman-system.txt
   includeRecentMessages: 12
@@ -71,9 +71,9 @@ custom:
   exemptAgentPatterns: [plan, planner]
   escalation:
     mode: soft_then_hard
-    softViolationsBeforeInterrupt: 1
-    hardInterruptThreshold: 2
-    reminderCooldownSeconds: 20
+    softViolationsBeforeInterrupt: 2
+    hardInterruptThreshold: 3
+    reminderCooldownSeconds: 60
     resetOnCommit: true
   hints:
     availableTools: []

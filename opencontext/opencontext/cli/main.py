@@ -465,6 +465,7 @@ def _default_watchman_system_prompt_text() -> str:
         - Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient network/dependency/setup noise) unless repeated behavior clearly blocks implementation progress.
         - Interruption is expensive; when evidence is weak or ambiguous, prefer violation=false and lower confidence.
         - False-positive interruptions are worse than occasional misses; prioritize precision over recall.
+        - Prefer waiting for persistent/repeated signals before interrupting on non-critical workflow issues.
         """
     ).strip() + "\n"
 

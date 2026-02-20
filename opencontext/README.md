@@ -734,7 +734,7 @@ The OpenCode plugin hooks into OpenCode's event system:
 3. **Tool Execution** (`tool.execute.after`)
    - Tracks every tool execution
    - Updates debt state and deterministic/custom rule checks
-   - Runs watchman inspection on tool activity when `watchman.inspectToolCalls=true` (default)
+   - Optional watchman inspection on tool activity when `watchman.inspectToolCalls=true` (default is `false` for lower-noise operation)
    - Tracks research/failure/MCP workflow debts
 
 4. **Message Updated** (`message.updated`)
@@ -742,7 +742,7 @@ The OpenCode plugin hooks into OpenCode's event system:
    - Runs watchman inspection on completed assistant turns (`watchman.inspectAssistantTurns=true`)
 
 5. **Session Idle** (`session.idle`)
-   - Optional safety inspection pass (`watchman.inspectOnIdle=true`)
+   - Optional safety inspection pass (`watchman.inspectOnIdle=true`, default is `false`)
 
 ### Watchman Response Contract
 - Provider API: OpenAI-compatible `POST /chat/completions`
@@ -818,11 +818,11 @@ Example `law-runtime.json`:
 ```json
 {
   "gcc": {
-    "requireCheckpointEveryTools": 6,
+    "requireCheckpointEveryTools": 10,
     "requireFailedAttemptLookup": true,
     "failureLookupPolicyFile": "law-failure-policy.txt",
     "failureClassifierEnabled": true,
-    "failureClassifierMinConfidence": 0.55,
+    "failureClassifierMinConfidence": 0.7,
     "failureClassifierRequireModelDecision": true,
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false
@@ -831,7 +831,7 @@ Example `law-runtime.json`:
     "requireCaptureOnDocsOrGithub": true,
     "capturePolicyFile": "law-research-policy.txt",
     "captureClassifierEnabled": true,
-    "captureClassifierMinConfidence": 0.55,
+    "captureClassifierMinConfidence": 0.7,
     "captureClassifierRequireModelDecision": true
   },
   "critic": {
@@ -852,12 +852,12 @@ Example `law-runtime.json`:
   "watchman": {
     "enabled": true,
     "inspectAssistantTurns": true,
-    "inspectToolCalls": true,
+    "inspectToolCalls": false,
     "inspectCompaction": true,
-    "inspectOnIdle": true,
+    "inspectOnIdle": false,
     "skipDuringPlanningAgent": true,
     "dedupeSameViolationUntilResolved": true,
-    "minConfidence": 0.65,
+    "minConfidence": 0.75,
     "requireModelDecision": true,
     "systemPromptFile": "law-watchman-system.txt"
   },
@@ -865,8 +865,8 @@ Example `law-runtime.json`:
     "policyFile": "law-policy.txt",
     "escalation": {
       "mode": "soft_then_hard",
-      "softViolationsBeforeInterrupt": 1,
-      "hardInterruptThreshold": 2
+      "softViolationsBeforeInterrupt": 2,
+      "hardInterruptThreshold": 3
     },
     "rules": [
       {
