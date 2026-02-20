@@ -564,13 +564,15 @@ def _render_agent_guide_text(
         - tool.execute.after: update debt, evaluate deterministic + custom rules.
         - message.updated (assistant completion): run watchman inspection.
         - session.idle: safety pass.
-        - session.compacted: enforce checkpoint + context recovery.
+        - session.compacted: record compaction event; deterministic mode can open debt immediately, model mode judges recovery need.
 
         What Watchman Sees
         - Current law config summary.
         - Plain-text policy ({policy_path}).
         - Recent assistant/user messages.
         - Recent tool calls (tool name + command + output snippet).
+        - Recent interruptions + post-alert actions (to avoid repeating already-satisfied alerts).
+        - Recent debt transitions (open/clear history).
         - Debt state (checkpoint/research/failure/mcp).
         - Per-rule custom violation counters.
 
@@ -580,6 +582,8 @@ def _render_agent_guide_text(
         - reason: string
         - correction_prompt: string
         - confidence: number
+        - optional satisfaction_evidence: string
+        - optional debt_updates: pendingCheckpointOverdue|pendingCompactionCheckpoint => open|clear|keep
 
         Malformed Output Handling
         - The plugin requests structured JSON output (default `json_schema`, optional `json_object` fallback).
@@ -595,6 +599,16 @@ def _render_agent_guide_text(
            - precedence: environment vars > project runtime config > global runtime config > law defaults.
         2) Deterministic behavior config
            - gcc.*, mcp.*, research.*, watchman.*
+           - Key debt mode controls:
+             - gcc.checkpointDebtJudgeMode: model_only | model_first_fallback | deterministic
+             - gcc.compactionDebtJudgeMode: model_only | model_first_fallback | deterministic
+           - Key watchman memory windows:
+             - watchman.includeRecentAlerts
+             - watchman.includeRecentActionsAfterAlerts
+           - Key noise controls:
+             - watchman.inspectToolCalls (default false)
+             - watchman.inspectOnIdle (default false)
+             - watchman.minConfidence (default 0.75)
         3) Custom deterministic rules (section `custom.rules`)
            - Trigger-aware, condition-aware checks with required tools/commands.
         4) Custom escalation strategy (section `custom.escalation`)
