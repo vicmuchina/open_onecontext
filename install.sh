@@ -368,7 +368,7 @@ echo "     ${PROJECT_DIR}/.opencode/skills/opencontext/"
 echo ""
 fi
 echo "  3. Use GCC commands during development:"
-echo "     opencontext commit \"Implemented feature X\""
+echo "     opencontext commit -m \"Implemented feature X\""
 echo "     opencontext branch experiment-optimization"
 echo "     opencontext law status"
 echo "     opencontext tui"
