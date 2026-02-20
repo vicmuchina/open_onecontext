@@ -622,6 +622,91 @@ def _render_agent_guide_text(
         8) Research capture policy updates ({research_policy_path})
            - Control when docs/GitHub/similar-project findings must be checkpointed.
 
+        Full Config Key Map (edit in {law_path})
+        - mode
+        - cooldowns:
+          - interruptionSeconds
+          - sameRuleSeconds
+        - limits:
+          - maxConsecutiveInjections
+        - gcc:
+          - requireInit
+          - requireCheckpointEveryTools
+          - checkpointDebtJudgeMode
+          - requireFailedAttemptLookup
+          - failureLookupPolicyFile
+          - failureClassifierEnabled
+          - failureClassifierMinConfidence
+          - failureClassifierRequireModelDecision
+          - compactionCheckpointRequired
+          - compactionDebtJudgeMode
+          - skipCheckpointDuringPlanningAgent
+          - countReadOnlyToolsForCheckpoint
+        - mcp:
+          - requireAwarenessAtSessionStart
+          - requireUseWhenRelevant
+          - usageReminderEveryTools
+        - research:
+          - requireCaptureOnDocsOrGithub
+          - capturePolicyFile
+          - captureClassifierEnabled
+          - captureClassifierMinConfidence
+          - captureClassifierRequireModelDecision
+          - docsKeywords
+        - critic:
+          - enabled
+          - provider
+          - baseUrl
+          - endpointPath
+          - authHeader
+          - apiKeyPrefix
+          - headers
+          - request
+          - model
+          - modelFallbacks
+          - apiKeyEnv
+          - modelEnv
+          - timeoutMs
+          - maxTokensCritic
+          - maxTokensWatchman
+          - strictJsonRetryAttempts
+          - responseFormatStrategy
+        - watchman:
+          - enabled
+          - inspectAssistantTurns
+          - inspectToolCalls
+          - inspectCompaction
+          - inspectOnIdle
+          - skipDuringPlanningAgent
+          - dedupeSameViolationUntilResolved
+          - minConfidence
+          - requireModelDecision
+          - systemPromptFile
+          - includeRecentMessages
+          - includeRecentToolCalls
+          - includeRecentAlerts
+          - includeRecentActionsAfterAlerts
+        - observability:
+          - traceEnabled
+          - traceFile
+        - custom:
+          - enabled
+          - policyFile
+          - exemptAgentPatterns
+          - escalation.mode
+          - escalation.softViolationsBeforeInterrupt
+          - escalation.hardInterruptThreshold
+          - escalation.reminderCooldownSeconds
+          - escalation.resetOnCommit
+          - rules[]
+          - hints.availableTools
+          - hints.availableSkills
+          - hints.preferredCommands
+          - hints.importantMcpServers
+        - agentGuide:
+          - path
+          - includeInWatchmanPayload
+
         Operator Bootstrap Questions (ask before major work)
         - Which provider should watchman use? (Chutes / OpenAI / other OpenAI-compatible)
         - What base URL should be used? (example: https://llm.chutes.ai/v1)
