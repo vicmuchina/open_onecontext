@@ -266,7 +266,7 @@ opencontext init --project-name "MyApp"
 # 2. Work with OpenCode - plugin enforces workflow continuously
 
 # 3. Commit when prompted/enforced
-opencontext commit "Implemented feature X"
+opencontext commit -m "Implemented feature X"
 
 # 4. View status
 opencontext status

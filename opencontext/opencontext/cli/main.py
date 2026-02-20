@@ -92,7 +92,8 @@ def init(project_name: Optional[str], goal: Optional[str], goal_file: Optional[P
 
 
 @cli.command()
-@click.argument('summary')
+@click.argument('summary', required=False)
+@click.option('--message', '-m', help='Commit summary message (git-style alias for SUMMARY)')
 @click.option('--approach', '-a', help='Name of the approach being tested')
 @click.option('--status', '-s', default='active', 
               type=click.Choice(['active', 'abandoned', 'merged']),
@@ -100,7 +101,8 @@ def init(project_name: Optional[str], goal: Optional[str], goal_file: Optional[P
 @click.option('--reason', '-r', help='Reason for status (especially abandoned)')
 @click.option('--performance', '-p', help='Performance notes')
 def commit(
-    summary: str,
+    summary: Optional[str],
+    message: Optional[str],
     approach: Optional[str],
     status: str,
     reason: Optional[str],
@@ -108,12 +110,28 @@ def commit(
 ):
     """Create a checkpoint commit.
     
-    Example: opencontext commit "Implemented auth module"
+    Examples:
+      opencontext commit "Implemented auth module"
+      opencontext commit -m "Implemented auth module"
     """
+    final_summary = (summary or "").strip()
+    if message and message.strip():
+        if final_summary:
+            console.print("[red]Error: provide either SUMMARY or --message/-m, not both.[/red]")
+            raise click.Abort()
+        final_summary = message.strip()
+
+    if not final_summary:
+        console.print("[red]Error: commit summary is required.[/red]")
+        console.print("[yellow]Use either:[/yellow]")
+        console.print("  opencontext commit \"<summary>\"")
+        console.print("  opencontext commit -m \"<summary>\"")
+        raise click.Abort()
+
     try:
         gcc = GCC()
         gcc.commit(
-            summary=summary,
+            summary=final_summary,
             approach=approach,
             status=status,
             reason=reason,

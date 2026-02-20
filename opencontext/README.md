@@ -408,6 +408,8 @@ opencode serve --hostname 127.0.0.1 --port 4096 --print-logs --log-level DEBUG
 
 ```bash
 opencontext context --log --lines 80
+opencontext commit -m "Checkpoint after <work>"
+# or positional form:
 opencontext commit "Checkpoint after <work>"
 ```
 
@@ -448,6 +450,8 @@ opencontext init [--project-name <name>] [--goal <description>]
 opencontext init [--project-name <name>] [--goal-file SPEC.md]
 
 # Create a checkpoint
+opencontext commit -m <summary> [--approach <name>] [--status <active|abandoned|merged>]
+# or positional:
 opencontext commit <summary> [--approach <name>] [--status <active|abandoned|merged>]
 
 # Create isolated branch
@@ -645,7 +649,7 @@ The plugin provides a **continuous Law Enforcer** (interrupt + continue):
 When OpenCode compacts context:
 ```
 ⚠️ Context compacted. Checkpoint required.
-💡 opencontext commit '<summary>'
+💡 opencontext commit -m '<summary>'
 💡 opencontext context --log --lines 80
 ```
 
@@ -879,7 +883,7 @@ Customizing without code changes:
 **Session 1:**
 ```bash
 # User works with agent...
-opencontext commit "Session checkpoint - debugging auth issue"
+opencontext commit -m "Session checkpoint - debugging auth issue"
 # User ends session
 ```
 
@@ -893,7 +897,7 @@ opencontext commit "Session checkpoint - debugging auth issue"
 opencontext context --log
 # Shows previous debugging attempts
 
-opencontext commit "Fixed auth bug - wrong password validation"
+opencontext commit -m "Fixed auth bug - wrong password validation"
 ```
 
 ### Branching Example
@@ -903,7 +907,7 @@ opencontext commit "Fixed auth bug - wrong password validation"
 opencontext branch experiment-caching
 
 # Try adding cache layer...
-opencontext commit "Added Redis caching" \
+opencontext commit -m "Added Redis caching" \
   --approach "Redis Cache" \
   --status active
 

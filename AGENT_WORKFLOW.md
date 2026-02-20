@@ -46,6 +46,8 @@ opencode serve --hostname 127.0.0.1 --port 4096 --print-logs --log-level DEBUG
   - idle/compaction safety passes (`session.idle`, `session.compacted`)
 - Commit progress regularly:
 ```bash
+opencontext commit -m "<summary>"
+# or positional:
 opencontext commit "<summary>"
 ```
 - Before retrying failed work:
@@ -57,12 +59,16 @@ opencontext context --log --lines 80
 ## If Research Was Done (docs/GitHub)
 Capture it immediately:
 ```bash
+opencontext commit -m "Research findings on <topic>"
+# or positional:
 opencontext commit "Research findings on <topic>"
 ```
 
 ## If Context Gets Compacted
 Do this sequence:
 ```bash
+opencontext commit -m "Post-compaction checkpoint"
+# or positional:
 opencontext commit "Post-compaction checkpoint"
 opencontext context --log --lines 80
 ```

@@ -32,19 +32,20 @@ OpenContext implements the Git Context Controller (GCC) paper, providing version
 ### 1. COMMIT - Checkpoint Progress
 
 **When to use:** After completing a coherent milestone (implemented feature, fixed bug, completed test)
+**Preferred syntax:** Use git-style `opencontext commit -m "<summary>"` for better agent/tool consistency.
 
 ```bash
 # Basic commit
-opencontext commit "Implemented user authentication"
+opencontext commit -m "Implemented user authentication"
 
 # With approach tracking
-opencontext commit "Tested RAG-based memory" \
+opencontext commit -m "Tested RAG-based memory" \
   --approach "RAG Memory" \
   --status abandoned \
   --reason "Too computationally expensive"
 
 # With performance notes
-opencontext commit "Optimized database queries" \
+opencontext commit -m "Optimized database queries" \
   --approach "Query Optimization" \
   --status active \
   --performance "40% faster, all tests passing"
@@ -65,7 +66,7 @@ opencontext commit "Optimized database queries" \
 opencontext branch experiment-async-processing
 
 # Work on branch...
-opencontext commit "Implemented async handler"
+opencontext commit -m "Implemented async handler"
 
 # If it works, merge back
 opencontext switch main
@@ -166,7 +167,7 @@ Use these whenever an agent needs to confirm command purpose or flags before act
 **Session 1:**
 ```bash
 # Work on feature...
-opencontext commit "Implemented core logic - tests passing"
+opencontext commit -m "Implemented core logic - tests passing"
 # End session
 ```
 
@@ -176,23 +177,23 @@ opencontext commit "Implemented core logic - tests passing"
 # "Last commit: Implemented core logic - tests passing (abc123)"
 
 # Continue work seamlessly
-opencontext commit "Added edge case handling"
+opencontext commit -m "Added edge case handling"
 ```
 
 ### Pattern 2: Exploration with Abandonment
 
 ```bash
 # Main approach is working but slow
-opencontext commit "Current implementation working - baseline established"
+opencontext commit -m "Current implementation working - baseline established"
 
 # Try optimization
 opencontext branch experiment-caching
 
 # Test caching approach
-opencontext commit "Added Redis cache layer" --approach "Redis Cache" --status active
+opencontext commit -m "Added Redis cache layer" --approach "Redis Cache" --status active
 
 # Test shows it's fragile
-opencontext commit "Abandoned Redis approach" \
+opencontext commit -m "Abandoned Redis approach" \
   --approach "Redis Cache" \
   --status abandoned \
   --reason "Race conditions in concurrent access"
@@ -209,7 +210,7 @@ opencontext merge experiment-caching  # Merges documentation of what was tried
 opencontext benchmark --task "Load Test" --pass-rate 85
 
 # Optimize
-opencontext commit "Optimized database queries" --performance "20% improvement"
+opencontext commit -m "Optimized database queries" --performance "20% improvement"
 
 # Test again
 opencontext benchmark --task "Load Test" --pass-rate 92 --notes "Query optimization worked"
@@ -242,7 +243,7 @@ opencontext benchmark --task "Load Test" --pass-rate 92 --notes "Query optimizat
 ### 2. Approach Documentation
 Always document experimental approaches:
 ```bash
-opencontext commit "Tested approach X" \
+opencontext commit -m "Tested approach X" \
   --approach "Approach Name" \
   --status abandoned \
   --reason "Why it didn't work"
@@ -257,7 +258,7 @@ opencontext feedback "The RAG approach is too slow for production"
 ### 4. Context Compaction Response
 When OpenCode compacts context (Law Enforcer warns/intervenes):
 ```bash
-opencontext commit "Context compacted - checkpointing progress"
+opencontext commit -m "Context compacted - checkpointing progress"
 ```
 
 ### 5. Law Policy Operations
@@ -288,7 +289,7 @@ On session start in GCC project:
 ### Context Compaction Warning + Enforcement
 When OpenCode compacts context:
 - ⚠️ Requires a checkpoint + context recovery workflow
-- 💡 Enforces: `opencontext commit '<summary>'` then `opencontext context --log --lines 80`
+- 💡 Enforces: `opencontext commit -m '<summary>'` then `opencontext context --log --lines 80`
 
 ### Milestone Enforcement
 After configurable significant tool count:
@@ -342,8 +343,8 @@ pip install --force-reinstall opencontext
 opencontext init --project-name "MyApp" --goal "Build scraper"
 
 # Daily workflow
-opencontext commit "What was achieved"                    # Basic
-opencontext commit "What was achieved" --approach "Name"  # With tracking
+opencontext commit -m "What was achieved"                    # Basic
+opencontext commit -m "What was achieved" --approach "Name"  # With tracking
 opencontext branch experiment-name                         # Explore
 opencontext merge experiment-name                          # Integrate
 opencontext context                                         # View state

@@ -290,10 +290,10 @@ opencontext init [--project-name <name>] [--goal <description>]
 ```
 Creates `.GCC/` structure with `main.md` and `branches/main/`.
 
-#### `opencontext commit <summary>`
+#### `opencontext commit -m <summary>` (or `opencontext commit <summary>`)
 Create a checkpoint:
 ```bash
-opencontext commit "Implemented user authentication module"
+opencontext commit -m "Implemented user authentication module"
 ```
 Actions:
 1. Updates `commit.md` with 3-block format
@@ -512,7 +512,7 @@ The law policy supports any OpenAI-compatible provider via `.GCC/law-enforcer.js
 When abandoning an approach:
 
 ```bash
-opencontext commit "Abandoned RAG-based memory" \
+opencontext commit -m "Abandoned RAG-based memory" \
   --approach "RAG Memory" \
   --status abandoned \
   --reason "Too fragile and computationally expensive" \
@@ -566,7 +566,7 @@ Every `opencontext commit` creates a corresponding git commit:
 
 ```bash
 # GCC command
-opencontext commit "Implemented auth module"
+opencontext commit -m "Implemented auth module"
 
 # Creates git commit
 # Message: [GCC] Implemented auth module
@@ -627,9 +627,9 @@ opencontext init --project-name "MyApp" --goal "Build a web scraper"
 # Plugin shows: "📊 Context: 10% full"
 
 # After implementing core feature
-opencontext commit "Implemented basic scraping logic"
+opencontext commit -m "Implemented basic scraping logic"
 
-# Plugin shows: "🎯 5 actions completed. Suggestion: opencontext commit '...'"
+# Plugin shows: "🎯 5 actions completed. Suggestion: opencontext commit -m '...'"
 
 # Try alternative approach
 opencontext branch experiment-async-scraper
@@ -637,7 +637,7 @@ opencontext branch experiment-async-scraper
 # Work on alternative...
 
 # Abandon approach
-opencontext commit "Abandoned async approach" \
+opencontext commit -m "Abandoned async approach" \
   --approach "Async Scraper" \
   --status abandoned \
   --reason "Complexity outweighs benefits"
@@ -654,7 +654,7 @@ opencontext tui  # Navigate to Evolution tab
 
 ```bash
 # User ends session
-opencontext commit "Session checkpoint - debugging auth issue"
+opencontext commit -m "Session checkpoint - debugging auth issue"
 
 # New session starts...
 # Plugin auto-loads context:
