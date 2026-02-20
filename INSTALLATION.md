@@ -191,6 +191,7 @@ Memory-assist history sizing is token-budgeted by default (to avoid overcrowding
 - `memoryAssist.historyBudgetTargetFraction: 0.35`
 - `memoryAssist.historyBudgetMinFraction: 0.30`
 - `memoryAssist.historyBudgetMaxFraction: 0.40`
+- `memoryAssist.historyBudgetRecencyFraction: 0.50` and `memoryAssist.historyBudgetSemanticFraction: 0.50` (tunable split inside total budget)
 - `memoryAssist.historyContextWindowFallbackTokens: 128000`
 - optional override when provider metadata is missing/inaccurate: `critic.maxInputTokensOverride`
 

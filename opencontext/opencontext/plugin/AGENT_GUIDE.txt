@@ -22,6 +22,7 @@ Enforcement style:
 - Memory candidate retrieval is token-budgeted by default:
   - target fraction: 0.35 of watchman model context
   - bounds: 0.30 to 0.40
+  - split inside total budget: recency 0.50 / semantic 0.50 (both tunable)
   - fallback context window when metadata is missing: 128000 tokens
   - override with `critic.maxInputTokensOverride` when provider metadata is unreliable
 

@@ -150,8 +150,14 @@ Deterministic debt triggers based on simple patterns are brittle in dynamic Open
   - `memoryAssist.historyContextWindowFallbackTokens`
   - `memoryAssist.historyBudgetEstimateCharsPerToken`
   - `memoryAssist.historyBudgetPerCandidateOverheadTokens`
+  - `memoryAssist.historyBudgetRecencyFraction`
+  - `memoryAssist.historyBudgetSemanticFraction`
   - `memoryAssist.maxBudgetedCandidates`
   - `memoryAssist.minBudgetedCandidates`
+- Candidate packing behavior in budget mode:
+  - reserves a tunable split of total budget for recent commit summaries vs semantic matches
+  - default split is `50/50`
+  - then uses overflow fill if one bucket under-utilizes its share
 - Added watchman evidence telemetry:
   - `memoryAssistBudget` is attached to watchman payload/trace with source (`override`, `model_metadata`, or fallback), context window, and consumed budget estimates.
 

@@ -146,11 +146,13 @@ In `.GCC/`:
 - Default policy locked:
   - target fraction: `35%`
   - bounded range: `30%` to `40%`
+  - within-budget split: `50% recency` / `50% semantic` (tunable)
   - fallback context window: `128000` tokens when provider metadata is unavailable
 - Implementation contract:
   - resolve watchman model context window from provider model metadata (`/models` with `/v1/models` fallback)
   - allow hard override with `critic.maxInputTokensOverride`
   - compute `budgetTokens = contextWindowTokens * targetFraction`
+  - split budget into recency/semantic buckets via configurable fractions
   - select memory-assist candidates until budget is consumed (with min/max candidate clamps)
   - include budget diagnostics in watchman evidence payload/trace (`memoryAssistBudget`)
 - Non-goals:

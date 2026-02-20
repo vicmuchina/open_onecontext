@@ -128,6 +128,8 @@ const DEFAULT_LAW = {
     historyContextWindowFallbackTokens: 128000,
     historyBudgetEstimateCharsPerToken: 4,
     historyBudgetPerCandidateOverheadTokens: 24,
+    historyBudgetRecencyFraction: 0.5,
+    historyBudgetSemanticFraction: 0.5,
     maxBudgetedCandidates: 160,
     minBudgetedCandidates: 8,
   },
@@ -1013,6 +1015,42 @@ function sanitizeLaw(law) {
       )
     )
   );
+  sanitized.memoryAssist.historyBudgetRecencyFraction = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.memoryAssist.historyBudgetRecencyFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetRecencyFraction
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetSemanticFraction = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.memoryAssist.historyBudgetSemanticFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetSemanticFraction
+      )
+    )
+  );
+  const splitTotal =
+    Number(sanitized.memoryAssist.historyBudgetRecencyFraction || 0)
+    + Number(sanitized.memoryAssist.historyBudgetSemanticFraction || 0);
+  if (splitTotal <= 0) {
+    sanitized.memoryAssist.historyBudgetRecencyFraction =
+      DEFAULT_LAW.memoryAssist.historyBudgetRecencyFraction;
+    sanitized.memoryAssist.historyBudgetSemanticFraction =
+      DEFAULT_LAW.memoryAssist.historyBudgetSemanticFraction;
+  } else {
+    sanitized.memoryAssist.historyBudgetRecencyFraction = Number(
+      (sanitized.memoryAssist.historyBudgetRecencyFraction / splitTotal).toFixed(4)
+    );
+    sanitized.memoryAssist.historyBudgetSemanticFraction = Number(
+      (sanitized.memoryAssist.historyBudgetSemanticFraction / splitTotal).toFixed(4)
+    );
+  }
   sanitized.memoryAssist.maxBudgetedCandidates = Math.max(
     4,
     Math.min(
@@ -2151,6 +2189,8 @@ function buildLawSummaryForInspector(law) {
       historyBudgetEstimateCharsPerToken: law.memoryAssist.historyBudgetEstimateCharsPerToken,
       historyBudgetPerCandidateOverheadTokens:
         law.memoryAssist.historyBudgetPerCandidateOverheadTokens,
+      historyBudgetRecencyFraction: law.memoryAssist.historyBudgetRecencyFraction,
+      historyBudgetSemanticFraction: law.memoryAssist.historyBudgetSemanticFraction,
       maxBudgetedCandidates: law.memoryAssist.maxBudgetedCandidates,
       minBudgetedCandidates: law.memoryAssist.minBudgetedCandidates,
     },
@@ -2284,6 +2324,19 @@ function buildMemoryAssistCandidates({ law, state, gccHistory, budget }) {
     budget?.overheadTokens ?? law?.memoryAssist?.historyBudgetPerCandidateOverheadTokens ?? 24
   );
   const historyBudgetEnabled = budget?.enabled === true;
+  const recencyFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetRecencyFraction ?? 0.5),
+    0,
+    1
+  );
+  const semanticFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetSemanticFraction ?? 0.5),
+    0,
+    1
+  );
+  const splitTotal = recencyFraction + semanticFraction;
+  const normalizedRecencyFraction = splitTotal > 0 ? recencyFraction / splitTotal : 0.5;
+  const normalizedSemanticFraction = splitTotal > 0 ? semanticFraction / splitTotal : 0.5;
   const maxBudgetedCandidates = Math.max(
     1,
     Number(law?.memoryAssist?.maxBudgetedCandidates || DEFAULT_LAW.memoryAssist.maxBudgetedCandidates)
@@ -2298,17 +2351,41 @@ function buildMemoryAssistCandidates({ law, state, gccHistory, budget }) {
   const targetBudgetTokens = historyBudgetEnabled
     ? Math.max(0, Number(budget?.budgetTokens || 0))
     : 0;
+  const recencyBudgetTokens = historyBudgetEnabled
+    ? Math.max(0, Math.floor(targetBudgetTokens * normalizedRecencyFraction))
+    : 0;
+  const semanticBudgetTokens = historyBudgetEnabled
+    ? Math.max(0, targetBudgetTokens - recencyBudgetTokens)
+    : 0;
   const deduped = [];
   const seen = new Set();
   let index = 0;
   let consumedEstimatedTokens = 0;
-  for (const row of merged) {
+
+  const stats = {
+    enabled: historyBudgetEnabled,
+    targetBudgetTokens,
+    recencyBudgetTokens,
+    semanticBudgetTokens,
+    recencyFraction: Number(normalizedRecencyFraction.toFixed(4)),
+    semanticFraction: Number(normalizedSemanticFraction.toFixed(4)),
+    consumedEstimatedTokens: 0,
+    consumedRecencyTokens: 0,
+    consumedSemanticTokens: 0,
+    selectedRecencyCandidates: 0,
+    selectedSemanticCandidates: 0,
+    selectedCandidates: 0,
+    maxBudgetedCandidates,
+    minBudgetedCandidates,
+    legacyMaxCandidates,
+  };
+
+  function tryAddCandidate(row, lane = "mixed", laneBudgetTokens = 0) {
     const snippet = clipText(row?.snippet || "", 320);
-    if (!snippet) continue;
+    if (!snippet) return false;
     const source = String(row?.source || "");
     const dedupeKey = `${source}::${snippet}`;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
+    if (seen.has(dedupeKey)) return false;
     const type = inferMemoryCandidateType(snippet);
     const score = Number(row?.score ?? 0);
     const commandHint = state?.pendingFailureLookup
@@ -2324,31 +2401,73 @@ function buildMemoryAssistCandidates({ law, state, gccHistory, budget }) {
       memory_ref: source || ".GCC",
     };
     const estimatedTokens = estimateTokensFromText(snippet, charsPerToken, overheadTokens);
+    const laneConsumed = lane === "semantic"
+      ? stats.consumedSemanticTokens
+      : lane === "recency"
+        ? stats.consumedRecencyTokens
+        : stats.consumedEstimatedTokens;
     const withinBudget = !historyBudgetEnabled
       || targetBudgetTokens <= 0
       || consumedEstimatedTokens + estimatedTokens <= targetBudgetTokens;
+    const withinLaneBudget = !historyBudgetEnabled
+      || laneBudgetTokens <= 0
+      || laneConsumed + estimatedTokens <= laneBudgetTokens;
     if (withinBudget || deduped.length < minBudgetedCandidates) {
-      deduped.push(candidate);
-      consumedEstimatedTokens += estimatedTokens;
+      if (withinLaneBudget || deduped.length < minBudgetedCandidates) {
+        deduped.push(candidate);
+        seen.add(dedupeKey);
+        consumedEstimatedTokens += estimatedTokens;
+        stats.consumedEstimatedTokens += estimatedTokens;
+        if (lane === "semantic") {
+          stats.consumedSemanticTokens += estimatedTokens;
+          stats.selectedSemanticCandidates += 1;
+        } else if (lane === "recency") {
+          stats.consumedRecencyTokens += estimatedTokens;
+          stats.selectedRecencyCandidates += 1;
+        }
+        stats.selectedCandidates = deduped.length;
+      }
     }
     index += 1;
-    if (historyBudgetEnabled && deduped.length >= maxBudgetedCandidates) break;
-    if (!historyBudgetEnabled && deduped.length >= legacyMaxCandidates) break;
-    if (historyBudgetEnabled && targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens) {
-      if (deduped.length >= minBudgetedCandidates) break;
+    return true;
+  }
+
+  if (historyBudgetEnabled) {
+    for (const row of commitFallback) {
+      if (deduped.length >= maxBudgetedCandidates) break;
+      tryAddCandidate(row, "recency", recencyBudgetTokens);
+      if (targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens && deduped.length >= minBudgetedCandidates) {
+        break;
+      }
+    }
+
+    for (const row of semantic) {
+      if (deduped.length >= maxBudgetedCandidates) break;
+      tryAddCandidate(row, "semantic", semanticBudgetTokens);
+      if (targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens && deduped.length >= minBudgetedCandidates) {
+        break;
+      }
+    }
+
+    const overflowRows = [...semantic, ...commitFallback].sort(
+      (a, b) => Number(b?.score || 0) - Number(a?.score || 0)
+    );
+    for (const row of overflowRows) {
+      if (deduped.length >= maxBudgetedCandidates) break;
+      tryAddCandidate(row, "mixed", 0);
+      if (targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens && deduped.length >= minBudgetedCandidates) {
+        break;
+      }
+    }
+  } else {
+    for (const row of merged) {
+      if (deduped.length >= legacyMaxCandidates) break;
+      tryAddCandidate(row, "mixed", 0);
     }
   }
   return {
     candidates: deduped,
-    stats: {
-      enabled: historyBudgetEnabled,
-      targetBudgetTokens,
-      consumedEstimatedTokens,
-      selectedCandidates: deduped.length,
-      maxBudgetedCandidates,
-      minBudgetedCandidates,
-      legacyMaxCandidates,
-    },
+    stats,
   };
 }
 

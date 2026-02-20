@@ -111,6 +111,7 @@ Edit `.GCC/law-enforcer.json`:
     - `memoryAssist.historyBudgetEnabled`
     - `memoryAssist.historyBudgetTargetFraction` (default `0.35`)
     - `memoryAssist.historyBudgetMinFraction` / `memoryAssist.historyBudgetMaxFraction` (default `0.30` / `0.40`)
+    - `memoryAssist.historyBudgetRecencyFraction` / `memoryAssist.historyBudgetSemanticFraction` (default `0.50` / `0.50`)
     - `memoryAssist.historyContextWindowFallbackTokens` (default `128000`)
     - `memoryAssist.maxBudgetedCandidates` / `memoryAssist.minBudgetedCandidates`
   - Optional provider override when metadata is unavailable:
@@ -136,6 +137,8 @@ If you want model-only judgment (no fallback decisions), set in `.GCC/law-enforc
   - `memoryAssist.historyBudgetTargetFraction: 0.35`
   - `memoryAssist.historyBudgetMinFraction: 0.30`
   - `memoryAssist.historyBudgetMaxFraction: 0.40`
+  - `memoryAssist.historyBudgetRecencyFraction: 0.50`
+  - `memoryAssist.historyBudgetSemanticFraction: 0.50`
   - `memoryAssist.historyContextWindowFallbackTokens: 128000`
 Edit `.GCC/law-runtime.json` for project-local API key/model overrides.
 Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.

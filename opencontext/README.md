@@ -374,6 +374,7 @@ Decision model (plain terms):
 - Memory-assist history payload is token-budgeted by default:
   - target: `memoryAssist.historyBudgetTargetFraction` (default `0.35`)
   - bounds: `memoryAssist.historyBudgetMinFraction` / `memoryAssist.historyBudgetMaxFraction` (default `0.30` / `0.40`)
+  - split: `memoryAssist.historyBudgetRecencyFraction` / `memoryAssist.historyBudgetSemanticFraction` (default `0.50` / `0.50`)
   - fallback context window: `memoryAssist.historyContextWindowFallbackTokens` (default `128000`)
   - optional hard override: `critic.maxInputTokensOverride`
 - Default watchman system prompt is precision-biased to reduce noise (read-only exploration/setup/CLI noise should not interrupt unless clearly actionable).

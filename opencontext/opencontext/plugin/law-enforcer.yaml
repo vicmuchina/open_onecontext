@@ -85,6 +85,8 @@ memoryAssist:
   historyContextWindowFallbackTokens: 128000
   historyBudgetEstimateCharsPerToken: 4
   historyBudgetPerCandidateOverheadTokens: 24
+  historyBudgetRecencyFraction: 0.5
+  historyBudgetSemanticFraction: 0.5
   maxBudgetedCandidates: 160
   minBudgetedCandidates: 8
 

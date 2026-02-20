@@ -624,6 +624,7 @@ def _render_agent_guide_text(
              - memoryAssist.historyBudgetTargetFraction (default 0.35)
              - memoryAssist.historyBudgetMinFraction / historyBudgetMaxFraction (default 0.30 / 0.40)
              - memoryAssist.historyContextWindowFallbackTokens (default 128000)
+             - memoryAssist.historyBudgetRecencyFraction / historyBudgetSemanticFraction (default 0.50 / 0.50)
              - memoryAssist.maxBudgetedCandidates / minBudgetedCandidates
              - memoryAssist.maxSuggestions
              - memoryAssist.cooldownSeconds
@@ -725,6 +726,8 @@ def _render_agent_guide_text(
           - historyContextWindowFallbackTokens
           - historyBudgetEstimateCharsPerToken
           - historyBudgetPerCandidateOverheadTokens
+          - historyBudgetRecencyFraction
+          - historyBudgetSemanticFraction
           - maxBudgetedCandidates
           - minBudgetedCandidates
         - observability:
@@ -1232,6 +1235,8 @@ def _validate_law_content(law: Dict) -> List[str]:
             "historyBudgetTargetFraction",
             "historyBudgetMinFraction",
             "historyBudgetMaxFraction",
+            "historyBudgetRecencyFraction",
+            "historyBudgetSemanticFraction",
         ]:
             if key in memory_assist:
                 value = memory_assist.get(key)
@@ -1546,6 +1551,12 @@ def law_status(law_path_opt: Optional[Path]):
     memory_assist_budget_overhead = law_data.get("memoryAssist", {}).get(
         "historyBudgetPerCandidateOverheadTokens", "unknown"
     )
+    memory_assist_budget_recency_fraction = law_data.get("memoryAssist", {}).get(
+        "historyBudgetRecencyFraction", "unknown"
+    )
+    memory_assist_budget_semantic_fraction = law_data.get("memoryAssist", {}).get(
+        "historyBudgetSemanticFraction", "unknown"
+    )
     memory_assist_budget_max_candidates = law_data.get("memoryAssist", {}).get("maxBudgetedCandidates", "unknown")
     memory_assist_budget_min_candidates = law_data.get("memoryAssist", {}).get("minBudgetedCandidates", "unknown")
     compaction_mode = law_data.get("gcc", {}).get("compactionDebtJudgeMode", "unknown")
@@ -1601,6 +1612,8 @@ def law_status(law_path_opt: Optional[Path]):
         f"Memory assist fallback context tokens: {memory_assist_budget_ctx_fallback}\n"
         f"Memory assist chars/token estimate: {memory_assist_budget_chars_per_token}\n"
         f"Memory assist per-candidate overhead tokens: {memory_assist_budget_overhead}\n"
+        f"Memory assist recency budget fraction: {memory_assist_budget_recency_fraction}\n"
+        f"Memory assist semantic budget fraction: {memory_assist_budget_semantic_fraction}\n"
         f"Memory assist max budgeted candidates: {memory_assist_budget_max_candidates}\n"
         f"Memory assist min budgeted candidates: {memory_assist_budget_min_candidates}\n"
         f"Research classifier enabled: {research_classifier_enabled}\n"
