@@ -19,6 +19,8 @@ Default Balanced Policy (active immediately)
    - Avoid blocking shell flows when background execution tools are available.
 7) After session compaction, recover workflow state before normal work.
    - Create a checkpoint and retrieve recent context history.
+8) Avoid noisy interruptions for non-actionable workflow noise.
+   - Read-only discovery, harmless CLI flag mistakes, and transient setup/network issues should not trigger interruption unless they clearly block implementation.
 
 Customization Notes
 - Keep rules explicit, short, and testable.

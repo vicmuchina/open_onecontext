@@ -147,7 +147,7 @@ The plugin will automatically:
 opencontext law init
 opencontext law validate
 opencontext law status
-opencontext law watch -n 20
+opencontext io
 opencontext law guide
 ```
 
@@ -196,16 +196,34 @@ Watchman trace logs are written to:
 Use the built-in formatted watcher (short command):
 
 ```bash
+opencontext io
 opencontext law watch -n 20
-opencontext law watch --follow
 ```
 
-Benchmark Chutes models for structured JSON reliability + TPS:
+Benchmark provider models for structured JSON reliability + TPS and auto-write best model:
 
 ```bash
+# Chutes
 export CHUTES_API_KEY="<your_api_key>"
-python3 scripts/chutes_json_benchmark.py --response-format json_object --top 20
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://llm.chutes.ai/v1 \
+  --api-key-env CHUTES_API_KEY \
+  --response-format json_object \
+  --top 20 \
+  --write-runtime .GCC/law-runtime.json
+
+# Any OpenAI-compatible provider
+export PROVIDER_API_KEY="<your_api_key>"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://<provider>/v1 \
+  --api-key-env PROVIDER_API_KEY \
+  --max-models 20 \
+  --response-format json_object \
+  --top 20 \
+  --write-runtime .GCC/law-runtime.json
 ```
+
+The benchmark auto-discovers models from provider model endpoints (`/models` and `/v1/models` candidates), then scores JSON schema adherence + latency + tokens/sec.
 
 Agent-facing handbook and editable policy live in:
 
@@ -216,6 +234,8 @@ Agent-facing handbook and editable policy live in:
 .GCC/law-failure-policy.txt
 .GCC/law-research-policy.txt
 ```
+
+`.GCC/AGENT_GUIDE.txt` includes an operator bootstrap checklist so the assistant asks for provider URL, API-key env var, and project/global runtime target before changing config.
 
 ## Setup Commands
 
@@ -292,9 +312,9 @@ opencontext status
 opencontext tui
 
 # 6. Inspect watchman request/response evidence (formatted)
+opencontext io
+# optional recent-only snapshot
 opencontext law watch -n 20
-# live follow
-opencontext law watch --follow
 ```
 
 ## Uninstall

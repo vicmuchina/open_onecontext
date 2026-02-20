@@ -20,6 +20,14 @@ JSON reliability references used by this project:
   - https://github.com/vllm-project/vllm/issues/7656
   - https://github.com/vllm-project/vllm/issues/11828
 
+Operator-facing defaults (locked):
+- Short watchman I/O command: `opencontext io` (alias for formatted live watchman request/response stream).
+- Provider benchmarking script must support:
+  - Chutes and any OpenAI-compatible endpoint
+  - model discovery from provider model endpoints
+  - JSON schema-following + speed scoring (tokens/sec + latency)
+  - auto-writing best model/fallbacks into `.GCC/law-runtime.json` or `~/.config/opencontext/law-runtime.json`
+
 ---
 
 ## In-Progress Upgrade (Decision-Locked)

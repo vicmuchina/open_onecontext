@@ -19,17 +19,34 @@ opencontext law doctor
 3. For AI-assisted configuration, point your assistant to:
 - `.GCC/AGENT_GUIDE.txt` (primary setup/customization guide)
 - then `.GCC/law-enforcer.json` + `.GCC/law-policy.txt` for your custom behavior
+The generated guide includes a bootstrap questionnaire (provider URL, API-key env var, project/global runtime scope, and benchmark intent).
 4. Watch live watchman I/O (useful for debugging immediately):
 ```bash
-opencontext law watch --follow
+opencontext io
 ```
 
 After this, use `opencode` normally. The law enforcer runs in the background.
 
-Optional: benchmark Chutes model JSON reliability + speed:
+Optional: benchmark model JSON reliability + speed, then auto-configure best model:
 ```bash
+# Chutes
 export CHUTES_API_KEY="<your_api_key>"
-python3 scripts/chutes_json_benchmark.py --response-format json_object --top 15
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://llm.chutes.ai/v1 \
+  --api-key-env CHUTES_API_KEY \
+  --response-format json_object \
+  --top 15 \
+  --write-runtime .GCC/law-runtime.json
+
+# Any OpenAI-compatible provider
+export PROVIDER_API_KEY="<your_api_key>"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://<provider>/v1 \
+  --api-key-env PROVIDER_API_KEY \
+  --max-models 20 \
+  --response-format json_object \
+  --top 15 \
+  --write-runtime .GCC/law-runtime.json
 ```
 
 ## Documentation Map
@@ -51,7 +68,7 @@ python3 scripts/chutes_json_benchmark.py --response-format json_object --top 15
 - `opencontext/TEST_RESULTS.md` - recorded test runs and verification snapshots.
 - `opencontext/docs/SKILL.md` - OpenCode skill instructions for using OpenContext in agent sessions.
 - `opencontext/docs/papers/GCC_Paper_2508.00031.md` - local copy/notes of the GCC paper reference.
-- `scripts/chutes_json_benchmark.py` - benchmark JSON compliance + tokens/sec across Chutes models.
+- `scripts/chutes_json_benchmark.py` - benchmark JSON compliance + tokens/sec across Chutes or any OpenAI-compatible models.
 
 Quick install:
 

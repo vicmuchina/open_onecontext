@@ -25,6 +25,10 @@ opencontext law doctor
 - `.GCC/AGENT_GUIDE.txt` (main operator guide)
 - `.GCC/law-enforcer.json` (switches/thresholds)
 - `.GCC/law-policy.txt` (plain-language rules; already includes an active balanced default policy)
+4. Watch live watchman I/O:
+```bash
+opencontext io
+```
 
 ## Overview
 
@@ -246,8 +250,11 @@ node ./scripts/test-opencode-plugin-failure-debt-filter.mjs
 # Run live watchman trace test (requires CHUTES_API_KEY)
 CHUTES_API_KEY=... ./scripts/test-opencode-watchman-trace-live.sh
 
-# Benchmark all Chutes models for JSON compliance + speed (watchman-style tasks)
-CHUTES_API_KEY=... python3 ./scripts/chutes_json_benchmark.py --response-format json_object --top 20
+# Benchmark provider models for JSON compliance + speed (watchman-style tasks)
+# Chutes
+CHUTES_API_KEY=... python3 ./scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 20 --write-runtime .GCC/law-runtime.json
+# Any OpenAI-compatible provider
+PROVIDER_API_KEY=... python3 ./scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env PROVIDER_API_KEY --max-models 20 --response-format json_object --top 20 --write-runtime .GCC/law-runtime.json
 
 # Manual debug logs
 opencode --print-logs --log-level DEBUG run "plugin smoke test"
@@ -301,7 +308,7 @@ opencontext law init
 opencontext law validate
 opencontext law doctor
 opencontext law status
-opencontext law watch -n 20
+opencontext io
 opencontext law guide
 ```
 
@@ -316,6 +323,16 @@ export OPENCONTEXT_LAW_MODEL_ID="chutesai/Mistral-Small-3.2-24B-Instruct-2506"
 No-repeat key setup:
 - Global file: `~/.config/opencontext/law-runtime.json`
 - Project override: `.GCC/law-runtime.json`
+
+Auto-select best model + fallbacks and write runtime config:
+
+```bash
+# Project-local runtime
+python3 scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 15 --write-runtime .GCC/law-runtime.json
+
+# Global runtime (all projects)
+python3 scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env <ENV_VAR> --max-models 20 --response-format json_object --top 15 --write-runtime ~/.config/opencontext/law-runtime.json
+```
 
 Default `.GCC/law-enforcer.json` uses Chutes (`https://llm.chutes.ai/v1`) but you can switch to any OpenAI-compatible provider:
 
@@ -427,7 +444,7 @@ opencontext commit "Checkpoint after <work>"
 opencode --print-logs --log-level DEBUG run "plugin smoke test"
 
 # Law Enforcer watchman request/response (formatted)
-opencontext law watch -n 20
+opencontext io
 # live follow
 opencontext law watch --follow
 ```
@@ -967,8 +984,8 @@ opencontext merge experiment-caching
    ```
 2. Check trace rows:
    ```bash
+   opencontext io
    opencontext law watch -n 20
-   opencontext law watch --follow
    ```
 3. Confirm provider returns valid structured JSON output for watchman fields:
    - `violation`

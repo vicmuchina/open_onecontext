@@ -51,6 +51,7 @@ def cli(ctx, version):
       feedback   Add user feedback
       benchmark  Record benchmark results
       law        Manage Law Enforcer policy file
+      io         Follow watchman request/response logs
       tui        Launch TUI dashboard
     """
     if version:
@@ -432,6 +433,8 @@ def _default_law_policy_text() -> str:
            - Avoid blocking shell flows when background execution tools are available.
         7) After session compaction, recover workflow state before normal work.
            - Create a checkpoint and retrieve recent context history.
+        8) Avoid noisy interruptions for non-actionable workflow noise.
+           - Read-only discovery, harmless CLI flag mistakes, and transient setup/network issues should not trigger interruption unless they clearly block implementation.
 
         Customization Notes
         - Keep rules explicit, short, and testable.
@@ -461,6 +464,7 @@ def _default_watchman_system_prompt_text() -> str:
         - Do not interrupt read-only discovery/exploration steps (listing files, reading docs, checking help/usage) unless policy explicitly marks them actionable.
         - Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient network/dependency/setup noise) unless repeated behavior clearly blocks implementation progress.
         - Interruption is expensive; when evidence is weak or ambiguous, prefer violation=false and lower confidence.
+        - False-positive interruptions are worse than occasional misses; prioritize precision over recall.
         """
     ).strip() + "\n"
 
@@ -601,6 +605,26 @@ def _render_agent_guide_text(
         8) Research capture policy updates ({research_policy_path})
            - Control when docs/GitHub/similar-project findings must be checkpointed.
 
+        Operator Bootstrap Questions (ask before major work)
+        - Which provider should watchman use? (Chutes / OpenAI / other OpenAI-compatible)
+        - What base URL should be used? (example: https://llm.chutes.ai/v1)
+        - Which API key env var should be used? (example: CHUTES_API_KEY / OPENAI_API_KEY)
+        - Should runtime config be project-local ({runtime_path}) or global ({global_runtime_path})?
+        - Should we run model benchmark now and auto-write best model/fallbacks?
+        - If answers are missing, ask first instead of guessing credentials/routes.
+
+        Model Benchmark + Auto-Configure
+        - Chutes example:
+          python3 scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 15 --write-runtime .GCC/law-runtime.json
+        - Generic OpenAI-compatible example:
+          python3 scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env <ENV_VAR> --response-format json_object --max-models 20 --top 15 --write-runtime .GCC/law-runtime.json
+        - Global runtime write (all projects):
+          python3 scripts/chutes_json_benchmark.py ... --write-runtime ~/.config/opencontext/law-runtime.json
+        - Script behavior:
+          - discovers model IDs from provider model-list endpoint candidates (/models and /v1/models)
+          - benchmarks strict watchman-schema JSON compliance + latency + tokens/sec
+          - writes best model + fallback chain automatically when --write-runtime is set
+
         Custom Rule Schema (JSON)
         - id (string, required): stable rule identifier.
         - enabled (bool): whether rule is active.
@@ -663,6 +687,7 @@ def _render_agent_guide_text(
         - Check plugin/service logs:
           opencode --print-logs --log-level DEBUG run "plugin smoke test"
         - Check trace evidence:
+          opencontext io
           opencontext law watch -n 20
           opencontext law watch --follow
         - Validate config:
@@ -1332,6 +1357,11 @@ def law_status(law_path_opt: Optional[Path]):
 @click.option("--path", "trace_path_opt", type=click.Path(path_type=Path), help="Path to trace file")
 def law_watch(lines: int, follow: bool, include_interrupts: bool, trace_path_opt: Optional[Path]):
     """Show formatted watchman request/response logs (chat-style)."""
+    _law_watch_impl(lines=lines, follow=follow, include_interrupts=include_interrupts, trace_path_opt=trace_path_opt)
+
+
+def _law_watch_impl(lines: int, follow: bool, include_interrupts: bool, trace_path_opt: Optional[Path]) -> None:
+    """Internal watch renderer shared by `law watch` and `io`."""
     lines = max(1, lines)
 
     if trace_path_opt:
@@ -1404,6 +1434,16 @@ def law_watch(lines: int, follow: bool, include_interrupts: bool, trace_path_opt
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped.[/dim]")
             return
+
+
+@cli.command("io")
+@click.option("-n", "--lines", default=20, show_default=True, type=int, help="Number of recent watchman events to show")
+@click.option("-f", "--follow", is_flag=True, default=True, show_default=True, help="Follow log output live")
+@click.option("--include-interrupts", is_flag=True, help="Include law.interrupt.* events")
+@click.option("--path", "trace_path_opt", type=click.Path(path_type=Path), help="Path to trace file")
+def io_watch(lines: int, follow: bool, include_interrupts: bool, trace_path_opt: Optional[Path]):
+    """Shortcut for watching formatted watchman I/O."""
+    _law_watch_impl(lines=lines, follow=follow, include_interrupts=include_interrupts, trace_path_opt=trace_path_opt)
 
 
 @law.command("doctor")

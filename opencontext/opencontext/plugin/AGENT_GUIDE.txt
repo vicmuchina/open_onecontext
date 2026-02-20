@@ -9,5 +9,20 @@ Related runtime config files:
 - .GCC/law-runtime.json
 - ~/.config/opencontext/law-runtime.json
 
+Fast path:
+- opencontext io
+- opencontext law status
+- opencontext law doctor
+
+When provider/model is missing, ask the user:
+- provider type/base URL
+- API key env var name
+- project-local vs global runtime target
+- whether to run benchmark auto-config now
+
+Benchmark + auto-write runtime:
+- python3 scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 15 --write-runtime .GCC/law-runtime.json
+- python3 scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env <ENV_VAR> --response-format json_object --max-models 20 --top 15 --write-runtime .GCC/law-runtime.json
+
 If you see this template directly, regenerate project guide:
 opencontext law guide

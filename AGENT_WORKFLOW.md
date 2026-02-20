@@ -28,6 +28,12 @@ export CHUTES_API_KEY="<key>"
 # .GCC/law-runtime.json
 ```
 
+Before editing provider/model config, ask user for:
+- provider base URL
+- API key env var name
+- project-local vs global runtime target
+- whether to run model benchmark + auto-write now
+
 ## Start Work Session
 - Interactive:
 ```bash
@@ -76,17 +82,21 @@ opencontext context --log --lines 80
 ## Verify Enforcement Is Running
 - Check formatted watchman request/response:
 ```bash
+opencontext io
 opencontext law watch -n 20
-opencontext law watch --follow
 ```
 - Check law status:
 ```bash
 opencontext law status
 opencontext law doctor
 ```
-- Benchmark Chutes JSON behavior/speed when tuning model choice:
+- Benchmark JSON behavior/speed and auto-write runtime model selection:
 ```bash
-CHUTES_API_KEY="<key>" python3 scripts/chutes_json_benchmark.py --response-format json_object --top 20
+# Chutes
+CHUTES_API_KEY="<key>" python3 scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 20 --write-runtime .GCC/law-runtime.json
+
+# Any OpenAI-compatible provider
+PROVIDER_API_KEY="<key>" python3 scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env PROVIDER_API_KEY --max-models 20 --response-format json_object --top 20 --write-runtime .GCC/law-runtime.json
 ```
 
 ## Tune Provider or Behavior

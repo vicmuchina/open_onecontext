@@ -54,6 +54,12 @@ opencontext law guide
 
 6) Configure model provider (OpenAI-compatible)
 
+- First ask the user (do not guess):
+  - provider base URL
+  - API key env var name
+  - project-local or global runtime target
+  - whether to run benchmark auto-config now
+
 - Edit .GCC/law-enforcer.json -> critic section:
   - baseUrl: provider base URL (example: https://llm.chutes.ai/v1)
   - endpointPath: /chat/completions
@@ -71,6 +77,12 @@ opencontext law guide
 - Or set once in runtime config files:
   - ~/.config/opencontext/law-runtime.json (global)
   - .GCC/law-runtime.json (project override)
+
+- Auto-select best model + fallbacks and write runtime config:
+  - Chutes:
+    python3 ~/.local/share/opencontext/scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 15 --write-runtime .GCC/law-runtime.json
+  - Any OpenAI-compatible provider:
+    python3 ~/.local/share/opencontext/scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env <ENV_VAR> --max-models 20 --response-format json_object --top 15 --write-runtime .GCC/law-runtime.json
 
 7) Customize behavior (no plugin edits)
 
@@ -112,10 +124,10 @@ CHUTES_API_KEY="<key>" ~/.local/share/opencontext/scripts/test-opencode-watchman
 - Plugin logs: run opencode with --print-logs --log-level DEBUG
 - Law enforcer trace file: .GCC/law-enforcer-trace.jsonl
 - Formatted watchman request/response:
+  - opencontext io
   - opencontext law watch -n 20
-  - opencontext law watch --follow
-- JSON model benchmark (all Chutes models):
-  - CHUTES_API_KEY="<key>" python3 ~/.local/share/opencontext/scripts/chutes_json_benchmark.py --response-format json_object --top 20
+- JSON model benchmark (Chutes or any OpenAI-compatible provider):
+  - CHUTES_API_KEY="<key>" python3 ~/.local/share/opencontext/scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 20 --write-runtime .GCC/law-runtime.json
 
 If any test fails
 - Re-copy plugin from source to ~/.config/opencode/plugins/opencontext-reminder.js

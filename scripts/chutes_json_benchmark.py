@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Benchmark Chutes models for strict JSON output quality + speed.
+"""Benchmark OpenAI-compatible models for strict JSON output + speed.
 
-This script is tailored for OpenContext watchman-style JSON tasks.
-It can test all models from /v1/models and rank by:
-- JSON parse rate
-- Watchman schema compliance rate
-- average tokens/sec
-- average latency
+Originally built for Chutes, but supports any OpenAI-compatible provider.
+What it does:
+- discovers models from provider model-list endpoint
+- runs watchman-style JSON tasks against each model
+- scores parse rate, schema compliance, latency, tokens/sec
+- optionally writes best model + fallbacks into OpenContext runtime config
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -106,9 +106,23 @@ class CaseResult:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark Chutes JSON output reliability + speed")
-    parser.add_argument("--base-url", default="https://llm.chutes.ai/v1", help="OpenAI-compatible base URL")
+    parser = argparse.ArgumentParser(description="Benchmark OpenAI-compatible JSON output reliability + speed")
+    parser.add_argument("--base-url", default="https://llm.chutes.ai/v1", help="Provider base URL")
+    parser.add_argument("--models-url", default="", help="Override model-list endpoint URL")
+    parser.add_argument("--chat-url", default="", help="Override chat-completions endpoint URL")
+    parser.add_argument("--provider-name", default="openai_compatible", help="Label only (report metadata)")
+
     parser.add_argument("--api-key-env", default="CHUTES_API_KEY", help="Env var name for API key")
+    parser.add_argument("--api-key", default="", help="Explicit API key (overrides env)")
+    parser.add_argument("--auth-header", default="Authorization", help="Auth header name")
+    parser.add_argument("--api-key-prefix", default="Bearer", help="Auth prefix (empty for raw key)")
+    parser.add_argument(
+        "--extra-header",
+        action="append",
+        default=[],
+        help="Additional header key=value (repeatable)",
+    )
+
     parser.add_argument(
         "--response-format",
         choices=["json_object", "json_schema"],
@@ -124,6 +138,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top", type=int, default=20, help="Rows to print in leaderboard")
     parser.add_argument("--list-only", action="store_true", help="List models and exit")
     parser.add_argument("--output", default="", help="Output JSON file path")
+
+    parser.add_argument(
+        "--write-runtime",
+        action="append",
+        default=[],
+        help="Write best model + fallbacks into runtime config file (repeatable)",
+    )
+    parser.add_argument("--fallback-count", type=int, default=3, help="How many fallback models to write")
+    parser.add_argument("--include-api-key", action="store_true", help="Also persist API key into runtime file")
     return parser.parse_args()
 
 
@@ -178,6 +201,101 @@ def schema_ok_watchman(obj: Dict[str, Any]) -> bool:
     return True
 
 
+def parse_extra_headers(items: List[str]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for item in items:
+        if "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if k:
+            out[k] = v
+    return out
+
+
+def build_headers(args: argparse.Namespace, api_key: str) -> Dict[str, str]:
+    headers: Dict[str, str] = {
+        "Content-Type": "application/json",
+    }
+    auth_header = (args.auth_header or "").strip()
+    if auth_header and api_key:
+        prefix = (args.api_key_prefix or "").strip()
+        headers[auth_header] = f"{prefix} {api_key}".strip() if prefix else api_key
+    headers.update(parse_extra_headers(args.extra_header or []))
+    return headers
+
+
+def endpoint_candidates(base_url: str, path: str) -> List[str]:
+    base = base_url.rstrip("/")
+    path = "/" + path.strip("/")
+    candidates: List[str] = [f"{base}{path}"]
+
+    # If caller gave host root, also try /v1/...
+    if not base.endswith("/v1") and "/v1/" not in base:
+        candidates.append(f"{base}/v1{path}")
+
+    # If caller gave /v1 base, also try host root path for compatibility
+    if base.endswith("/v1"):
+        root = base[:-3].rstrip("/")
+        if root:
+            candidates.append(f"{root}{path}")
+
+    seen = set()
+    uniq: List[str] = []
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        uniq.append(c)
+    return uniq
+
+
+def extract_model_ids(payload: Any) -> List[str]:
+    ids: List[str] = []
+    if isinstance(payload, dict):
+        if isinstance(payload.get("data"), list):
+            for item in payload.get("data", []):
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    ids.append(item["id"].strip())
+                elif isinstance(item, str):
+                    ids.append(item.strip())
+        if not ids and isinstance(payload.get("models"), list):
+            for item in payload.get("models", []):
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    ids.append(item["id"].strip())
+                elif isinstance(item, str):
+                    ids.append(item.strip())
+    elif isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                ids.append(item["id"].strip())
+            elif isinstance(item, str):
+                ids.append(item.strip())
+    return sorted(set([x for x in ids if x]))
+
+
+def fetch_models(base_url: str, headers: Dict[str, str], timeout: float, models_url_override: str = "") -> Tuple[List[str], str]:
+    urls = [models_url_override] if models_url_override else endpoint_candidates(base_url, "/models")
+    last_error = ""
+    for url in urls:
+        if not url:
+            continue
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            if response.status_code >= 400:
+                last_error = f"{url} -> HTTP {response.status_code}"
+                continue
+            payload = response.json()
+            ids = extract_model_ids(payload)
+            if ids:
+                return ids, url
+            last_error = f"{url} -> no model ids"
+        except Exception as exc:
+            last_error = f"{url} -> {exc}"
+    raise RuntimeError(last_error or "no models endpoint succeeded")
+
+
 def build_body(model: str, case_payload: Dict[str, Any], max_tokens: int, response_format: str) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "model": model,
@@ -202,21 +320,8 @@ def build_body(model: str, case_payload: Dict[str, Any], max_tokens: int, respon
     return body
 
 
-def fetch_models(base_url: str, headers: Dict[str, str], timeout: float) -> List[str]:
-    url = f"{base_url.rstrip('/')}/models"
-    response = requests.get(url, headers=headers, timeout=timeout)
-    response.raise_for_status()
-    data = response.json().get("data", [])
-    model_ids: List[str] = []
-    for item in data:
-        mid = item.get("id")
-        if isinstance(mid, str) and mid.strip():
-            model_ids.append(mid.strip())
-    return sorted(set(model_ids))
-
-
 def run_case(
-    base_url: str,
+    chat_urls: List[str],
     headers: Dict[str, str],
     model: str,
     case_payload: Dict[str, Any],
@@ -224,31 +329,39 @@ def run_case(
     timeout: float,
     response_format: str,
 ) -> CaseResult:
-    url = f"{base_url.rstrip('/')}/chat/completions"
     body = build_body(model, case_payload, max_tokens, response_format)
+    last_error = ""
 
-    start = time.perf_counter()
-    try:
-        response = requests.post(url, headers=headers, json=body, timeout=timeout)
-        latency_ms = (time.perf_counter() - start) * 1000.0
-    except Exception as exc:
-        return CaseResult(False, False, False, 0.0, 0, raw_error=str(exc))
+    for url in chat_urls:
+        start = time.perf_counter()
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=timeout)
+            latency_ms = (time.perf_counter() - start) * 1000.0
+        except Exception as exc:
+            last_error = f"{url} -> {exc}"
+            continue
 
-    if response.status_code != 200:
-        return CaseResult(False, False, False, latency_ms, 0, raw_error=f"HTTP {response.status_code}")
+        # If endpoint path is wrong, try next candidate
+        if response.status_code in (404, 405):
+            last_error = f"{url} -> HTTP {response.status_code}"
+            continue
 
-    try:
-        data = response.json()
-    except Exception as exc:
-        return CaseResult(True, False, False, latency_ms, 0, raw_error=f"invalid_json_response: {exc}")
+        if response.status_code != 200:
+            return CaseResult(False, False, False, latency_ms, 0, raw_error=f"{url} -> HTTP {response.status_code}")
 
-    content = extract_message_content(data)
-    obj = safe_json_loads(content)
-    parse_ok = obj is not None
-    schema_ok = schema_ok_watchman(obj or {})
-    completion_tokens = int(((data.get("usage") or {}).get("completion_tokens") or 0))
+        try:
+            data = response.json()
+        except Exception as exc:
+            return CaseResult(True, False, False, latency_ms, 0, raw_error=f"{url} -> invalid_json_response: {exc}")
 
-    return CaseResult(True, parse_ok, schema_ok, latency_ms, completion_tokens, raw_error="")
+        content = extract_message_content(data)
+        obj = safe_json_loads(content)
+        parse_ok = obj is not None
+        schema_ok = schema_ok_watchman(obj or {})
+        completion_tokens = int(((data.get("usage") or {}).get("completion_tokens") or 0))
+        return CaseResult(True, parse_ok, schema_ok, latency_ms, completion_tokens, raw_error="")
+
+    return CaseResult(False, False, False, 0.0, 0, raw_error=last_error or "no chat endpoint succeeded")
 
 
 def format_num(value: Optional[float], ndigits: int = 2) -> str:
@@ -257,20 +370,63 @@ def format_num(value: Optional[float], ndigits: int = 2) -> str:
     return f"{value:.{ndigits}f}"
 
 
+def write_runtime_config(
+    path: Path,
+    args: argparse.Namespace,
+    api_key: str,
+    ranked_rows: List[Dict[str, Any]],
+) -> None:
+    if not ranked_rows:
+        return
+    best = ranked_rows[0]["model"]
+    fallback_count = max(0, int(args.fallback_count))
+    fallbacks = [row["model"] for row in ranked_rows[1 : 1 + fallback_count]]
+
+    existing: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                existing = {}
+        except Exception:
+            existing = {}
+
+    critic = existing.get("critic") if isinstance(existing.get("critic"), dict) else {}
+    critic.update(
+        {
+            "model": best,
+            "modelFallbacks": fallbacks,
+            "baseUrl": args.base_url,
+            "endpointPath": "/chat/completions",
+            "authHeader": args.auth_header,
+            "apiKeyPrefix": args.api_key_prefix,
+            "apiKeyEnv": args.api_key_env,
+            "responseFormatStrategy": "json_schema_then_json_object",
+        }
+    )
+    if args.include_api_key:
+        critic["apiKey"] = api_key
+
+    existing["critic"] = critic
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     args = parse_args()
-    api_key = os.environ.get(args.api_key_env, "").strip()
+
+    api_key = (args.api_key or "").strip() or os.environ.get(args.api_key_env, "").strip()
     if not api_key:
-        print(f"ERROR: missing API key in env var {args.api_key_env}", file=sys.stderr)
+        print(
+            f"ERROR: missing API key. Set --api-key or env var {args.api_key_env}",
+            file=sys.stderr,
+        )
         return 2
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = build_headers(args, api_key)
 
     try:
-        models = fetch_models(args.base_url, headers, args.timeout)
+        models, models_url_used = fetch_models(args.base_url, headers, args.timeout, args.models_url)
     except Exception as exc:
         print(f"ERROR: failed to fetch model list: {exc}", file=sys.stderr)
         return 2
@@ -293,6 +449,9 @@ def main() -> int:
             print(model)
         return 0
 
+    chat_urls = [args.chat_url] if args.chat_url else endpoint_candidates(args.base_url, "/chat/completions")
+    chat_urls = [x for x in chat_urls if x]
+
     started_at = datetime.now(timezone.utc).isoformat()
     model_results: List[Dict[str, Any]] = []
 
@@ -300,7 +459,7 @@ def main() -> int:
         case_results: List[CaseResult] = []
         for case in TASKS:
             result = run_case(
-                args.base_url,
+                chat_urls,
                 headers,
                 model,
                 case["payload"],
@@ -360,7 +519,10 @@ def main() -> int:
     report = {
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
+        "provider_name": args.provider_name,
         "base_url": args.base_url,
+        "models_url_used": models_url_used,
+        "chat_url_candidates": chat_urls,
         "response_format": args.response_format,
         "tasks": [case["name"] for case in TASKS],
         "models_tested": len(ranked),
@@ -386,6 +548,12 @@ def main() -> int:
             f"{format_num(row['avg_tokens_per_sec']):>6}  "
             f"{format_num(row['avg_latency_ms']):>7}"
         )
+
+    if args.write_runtime:
+        for raw_path in args.write_runtime:
+            p = Path(raw_path).expanduser()
+            write_runtime_config(p, args, api_key, ranked)
+            print(f"Wrote best-model runtime config: {p}")
 
     print(f"\nSaved full JSON report to: {output_file}")
     return 0

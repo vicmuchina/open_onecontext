@@ -12,3 +12,4 @@ Priority behavior:
 - Do not interrupt for read-only discovery/exploration steps (listing files, reading docs, help/usage checks) unless policy explicitly marks a violation.
 - Do not interrupt for harmless command usage mistakes (wrong flag, missing optional tool, transient network/dependency/setup noise) unless repeated behavior clearly blocks implementation progress.
 - Interruption is expensive; default to violation=false when evidence is weak, ambiguous, or incomplete.
+- False-positive interruptions are worse than occasional misses; prioritize precision over recall.

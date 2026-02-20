@@ -60,6 +60,9 @@ Deterministic debt triggers based on simple patterns are brittle in dynamic Open
 - GCC history evidence (recent + semantic matches) added to classifier/watchman payloads.
 - Watchman interruption now uses confidence threshold + model-decision gating.
 - Law asset generation/doctor/guide now includes research policy file.
+- Added short CLI shortcut `opencontext io` for formatted watchman request/response live tail.
+- Upgraded `scripts/chutes_json_benchmark.py` to benchmark Chutes and generic OpenAI-compatible providers with endpoint discovery and runtime auto-write support.
+- Expanded generated `AGENT_GUIDE.txt` instructions so agents ask operator bootstrap questions (provider URL, key env, runtime scope, benchmark intent) before guessing config.
 
 ### Remaining
 
