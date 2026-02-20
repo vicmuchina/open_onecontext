@@ -620,6 +620,11 @@ def _render_agent_guide_text(
              - memoryAssist.enabled
              - memoryAssist.minSuggestConfidence
              - memoryAssist.maxCandidates
+             - memoryAssist.historyBudgetEnabled
+             - memoryAssist.historyBudgetTargetFraction (default 0.35)
+             - memoryAssist.historyBudgetMinFraction / historyBudgetMaxFraction (default 0.30 / 0.40)
+             - memoryAssist.historyContextWindowFallbackTokens (default 128000)
+             - memoryAssist.maxBudgetedCandidates / minBudgetedCandidates
              - memoryAssist.maxSuggestions
              - memoryAssist.cooldownSeconds
            - Key noise controls:
@@ -683,6 +688,7 @@ def _render_agent_guide_text(
           - modelFallbacks
           - apiKeyEnv
           - modelEnv
+          - maxInputTokensOverride
           - timeoutMs
           - maxTokensCritic
           - maxTokensWatchman
@@ -712,6 +718,15 @@ def _render_agent_guide_text(
           - triggers
           - includeAbandonedWarnings
           - cooldownSeconds
+          - historyBudgetEnabled
+          - historyBudgetTargetFraction
+          - historyBudgetMinFraction
+          - historyBudgetMaxFraction
+          - historyContextWindowFallbackTokens
+          - historyBudgetEstimateCharsPerToken
+          - historyBudgetPerCandidateOverheadTokens
+          - maxBudgetedCandidates
+          - minBudgetedCandidates
         - observability:
           - traceEnabled
           - traceFile
@@ -1145,6 +1160,10 @@ def _validate_law_content(law: Dict) -> List[str]:
             value = critic.get("strictJsonRetryAttempts")
             if not isinstance(value, (int, float)) or value < 0:
                 errors.append("critic.strictJsonRetryAttempts must be a non-negative number.")
+        if "maxInputTokensOverride" in critic:
+            value = critic.get("maxInputTokensOverride")
+            if not isinstance(value, (int, float)) or value < 0:
+                errors.append("critic.maxInputTokensOverride must be a non-negative number.")
     else:
         errors.append("critic must be a mapping/object.")
 
@@ -1196,6 +1215,28 @@ def _validate_law_content(law: Dict) -> List[str]:
         for key in ["maxCandidates", "maxSuggestions", "cooldownSeconds"]:
             if key in memory_assist and not isinstance(memory_assist.get(key), (int, float)):
                 errors.append(f"memoryAssist.{key} must be a number.")
+        for key in [
+            "historyContextWindowFallbackTokens",
+            "historyBudgetEstimateCharsPerToken",
+            "historyBudgetPerCandidateOverheadTokens",
+            "maxBudgetedCandidates",
+            "minBudgetedCandidates",
+        ]:
+            if key in memory_assist and not isinstance(memory_assist.get(key), (int, float)):
+                errors.append(f"memoryAssist.{key} must be a number.")
+        if "historyBudgetEnabled" in memory_assist and not isinstance(
+            memory_assist.get("historyBudgetEnabled"), bool
+        ):
+            errors.append("memoryAssist.historyBudgetEnabled must be true or false.")
+        for key in [
+            "historyBudgetTargetFraction",
+            "historyBudgetMinFraction",
+            "historyBudgetMaxFraction",
+        ]:
+            if key in memory_assist:
+                value = memory_assist.get(key)
+                if not isinstance(value, (int, float)) or value < 0 or value > 1:
+                    errors.append(f"memoryAssist.{key} must be a number between 0 and 1.")
         if "triggers" in memory_assist:
             triggers = memory_assist.get("triggers")
             if not isinstance(triggers, list) or not all(isinstance(item, str) for item in triggers):
@@ -1474,6 +1515,7 @@ def law_status(law_path_opt: Optional[Path]):
     critic_model = law_data.get("critic", {}).get("model", "unknown")
     critic_fallbacks = law_data.get("critic", {}).get("modelFallbacks", [])
     critic_response_strategy = law_data.get("critic", {}).get("responseFormatStrategy", "json_schema_then_json_object")
+    critic_max_input_override = law_data.get("critic", {}).get("maxInputTokensOverride", "unknown")
     critic_base = law_data.get("critic", {}).get("baseUrl", "unknown")
     critic_path = law_data.get("critic", {}).get("endpointPath", "unknown")
     watchman_enabled = law_data.get("watchman", {}).get("enabled", "unknown")
@@ -1491,6 +1533,21 @@ def law_status(law_path_opt: Optional[Path]):
     memory_assist_candidates = law_data.get("memoryAssist", {}).get("maxCandidates", "unknown")
     memory_assist_suggestions = law_data.get("memoryAssist", {}).get("maxSuggestions", "unknown")
     memory_assist_cooldown = law_data.get("memoryAssist", {}).get("cooldownSeconds", "unknown")
+    memory_assist_budget_enabled = law_data.get("memoryAssist", {}).get("historyBudgetEnabled", "unknown")
+    memory_assist_budget_target = law_data.get("memoryAssist", {}).get("historyBudgetTargetFraction", "unknown")
+    memory_assist_budget_min = law_data.get("memoryAssist", {}).get("historyBudgetMinFraction", "unknown")
+    memory_assist_budget_max = law_data.get("memoryAssist", {}).get("historyBudgetMaxFraction", "unknown")
+    memory_assist_budget_ctx_fallback = law_data.get("memoryAssist", {}).get(
+        "historyContextWindowFallbackTokens", "unknown"
+    )
+    memory_assist_budget_chars_per_token = law_data.get("memoryAssist", {}).get(
+        "historyBudgetEstimateCharsPerToken", "unknown"
+    )
+    memory_assist_budget_overhead = law_data.get("memoryAssist", {}).get(
+        "historyBudgetPerCandidateOverheadTokens", "unknown"
+    )
+    memory_assist_budget_max_candidates = law_data.get("memoryAssist", {}).get("maxBudgetedCandidates", "unknown")
+    memory_assist_budget_min_candidates = law_data.get("memoryAssist", {}).get("minBudgetedCandidates", "unknown")
     compaction_mode = law_data.get("gcc", {}).get("compactionDebtJudgeMode", "unknown")
     research_policy_file = law_data.get("research", {}).get("capturePolicyFile", LAW_RESEARCH_POLICY_FILENAME)
     research_classifier_enabled = law_data.get("research", {}).get("captureClassifierEnabled", "unknown")
@@ -1521,6 +1578,7 @@ def law_status(law_path_opt: Optional[Path]):
         f"Critic model: {critic_model}\n"
         f"Critic fallbacks: {', '.join(critic_fallbacks) if isinstance(critic_fallbacks, list) and critic_fallbacks else 'none'}\n"
         f"Critic response format strategy: {critic_response_strategy}\n"
+        f"Critic max input tokens override: {critic_max_input_override}\n"
         f"Critic endpoint: {critic_base}{critic_path}\n"
         f"Watchman enabled: {watchman_enabled}\n"
         f"Watch assistant turns: {watchman_turns}\n"
@@ -1536,6 +1594,15 @@ def law_status(law_path_opt: Optional[Path]):
         f"Memory assist max candidates: {memory_assist_candidates}\n"
         f"Memory assist max suggestions: {memory_assist_suggestions}\n"
         f"Memory assist cooldown seconds: {memory_assist_cooldown}\n"
+        f"Memory assist token-budget enabled: {memory_assist_budget_enabled}\n"
+        f"Memory assist token-budget target fraction: {memory_assist_budget_target}\n"
+        f"Memory assist token-budget min fraction: {memory_assist_budget_min}\n"
+        f"Memory assist token-budget max fraction: {memory_assist_budget_max}\n"
+        f"Memory assist fallback context tokens: {memory_assist_budget_ctx_fallback}\n"
+        f"Memory assist chars/token estimate: {memory_assist_budget_chars_per_token}\n"
+        f"Memory assist per-candidate overhead tokens: {memory_assist_budget_overhead}\n"
+        f"Memory assist max budgeted candidates: {memory_assist_budget_max_candidates}\n"
+        f"Memory assist min budgeted candidates: {memory_assist_budget_min_candidates}\n"
         f"Research classifier enabled: {research_classifier_enabled}\n"
         f"Research classifier min confidence: {research_classifier_conf}\n"
         f"Research classifier require model decision: {research_classifier_model_only}\n"

@@ -187,6 +187,13 @@ You can also edit `.GCC/law-enforcer.json` for any OpenAI-compatible provider:
 The plugin starts with `response_format.type=json_schema`, then can fall back to `json_object` based on `critic.responseFormatStrategy`.
 If output is malformed, it retries in stricter JSON-only mode, then skips enforcement if still invalid.
 
+Memory-assist history sizing is token-budgeted by default (to avoid overcrowding watchman context):
+- `memoryAssist.historyBudgetTargetFraction: 0.35`
+- `memoryAssist.historyBudgetMinFraction: 0.30`
+- `memoryAssist.historyBudgetMaxFraction: 0.40`
+- `memoryAssist.historyContextWindowFallbackTokens: 128000`
+- optional override when provider metadata is missing/inaccurate: `critic.maxInputTokensOverride`
+
 Watchman trace logs are written to:
 
 ```bash

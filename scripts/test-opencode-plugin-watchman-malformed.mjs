@@ -115,9 +115,20 @@ const oldHome = process.env.HOME;
 process.env.CHUTES_API_KEY = "test-key";
 process.env.HOME = tempDir;
 let fetchCalls = 0;
+let chatFetchCalls = 0;
 const requestBodies = [];
 global.fetch = async (_url, options = {}) => {
   fetchCalls += 1;
+  const method = String(options?.method || "POST").toUpperCase();
+  if (method === "GET") {
+    return ({
+      ok: true,
+      json: async () => ({
+        data: [{ id: "zai-org/GLM-4.7-Flash", max_input_tokens: 128000 }],
+      }),
+    });
+  }
+  chatFetchCalls += 1;
   requestBodies.push(JSON.parse(String(options.body || "{}")));
   return ({
   ok: true,
@@ -177,8 +188,8 @@ try {
     console.error("FAIL  malformed output did not surface parse_invalid_* source");
     process.exit(1);
   }
-  if (fetchCalls !== 4) {
-    console.error(`FAIL  expected strict retry+format fallback fetch count=4, got ${fetchCalls}`);
+  if (chatFetchCalls !== 4) {
+    console.error(`FAIL  expected strict retry+format fallback chat fetch count=4, got ${chatFetchCalls}`);
     process.exit(1);
   }
   if (requestBodies[0]?.response_format?.type !== "json_schema") {

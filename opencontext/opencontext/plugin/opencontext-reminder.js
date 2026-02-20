@@ -25,6 +25,7 @@ const CONFIG = {
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
   lawCacheMs: 5000,
+  modelMetadataCacheMs: 10 * 60 * 1000,
   maxRecentTools: 12,
   maxRecentToolExecutions: 24,
   maxSnippetChars: 1200,
@@ -84,6 +85,7 @@ const DEFAULT_LAW = {
     ],
     apiKeyEnv: "CHUTES_API_KEY",
     modelEnv: "OPENCONTEXT_LAW_MODEL_ID",
+    maxInputTokensOverride: 0,
     timeoutMs: 8000,
     maxTokensCritic: 120,
     maxTokensWatchman: 320,
@@ -119,6 +121,15 @@ const DEFAULT_LAW = {
     triggers: ["assistant_turn"],
     includeAbandonedWarnings: true,
     cooldownSeconds: 120,
+    historyBudgetEnabled: true,
+    historyBudgetTargetFraction: 0.35,
+    historyBudgetMinFraction: 0.30,
+    historyBudgetMaxFraction: 0.40,
+    historyContextWindowFallbackTokens: 128000,
+    historyBudgetEstimateCharsPerToken: 4,
+    historyBudgetPerCandidateOverheadTokens: 24,
+    maxBudgetedCandidates: 160,
+    minBudgetedCandidates: 8,
   },
   custom: {
     enabled: true,
@@ -162,6 +173,10 @@ let runtimeConfigCache = {
   fetchedAt: 0,
   directory: "",
   data: null,
+};
+let modelMetadataCache = {
+  fetchedAt: 0,
+  items: {},
 };
 let mcpNamesCache = {
   fetchedAt: 0,
@@ -776,6 +791,14 @@ function sanitizeLaw(law) {
   if (!sanitized.critic.model || typeof sanitized.critic.model !== "string") {
     sanitized.critic.model = DEFAULT_LAW.critic.model;
   }
+  sanitized.critic.maxInputTokensOverride = Math.max(
+    0,
+    Math.round(
+      Number(
+        sanitized.critic.maxInputTokensOverride ?? DEFAULT_LAW.critic.maxInputTokensOverride
+      )
+    )
+  );
   sanitized.critic.model = sanitized.critic.model.trim() || DEFAULT_LAW.critic.model;
   const fallbackModels = normalizeStringArray(
     sanitized.critic.modelFallbacks,
@@ -907,6 +930,110 @@ function sanitizeLaw(law) {
       3600,
       Math.round(
         Number(sanitized.memoryAssist.cooldownSeconds ?? DEFAULT_LAW.memoryAssist.cooldownSeconds)
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetEnabled = toBool(
+    sanitized.memoryAssist.historyBudgetEnabled,
+    DEFAULT_LAW.memoryAssist.historyBudgetEnabled
+  );
+  sanitized.memoryAssist.historyBudgetTargetFraction = Math.max(
+    0.05,
+    Math.min(
+      0.95,
+      Number(
+        sanitized.memoryAssist.historyBudgetTargetFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetTargetFraction
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetMinFraction = Math.max(
+    0.05,
+    Math.min(
+      0.95,
+      Number(
+        sanitized.memoryAssist.historyBudgetMinFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetMinFraction
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetMaxFraction = Math.max(
+    0.05,
+    Math.min(
+      0.95,
+      Number(
+        sanitized.memoryAssist.historyBudgetMaxFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetMaxFraction
+      )
+    )
+  );
+  if (sanitized.memoryAssist.historyBudgetMinFraction > sanitized.memoryAssist.historyBudgetMaxFraction) {
+    const swap = sanitized.memoryAssist.historyBudgetMinFraction;
+    sanitized.memoryAssist.historyBudgetMinFraction = sanitized.memoryAssist.historyBudgetMaxFraction;
+    sanitized.memoryAssist.historyBudgetMaxFraction = swap;
+  }
+  sanitized.memoryAssist.historyBudgetTargetFraction = Math.max(
+    sanitized.memoryAssist.historyBudgetMinFraction,
+    Math.min(
+      sanitized.memoryAssist.historyBudgetMaxFraction,
+      sanitized.memoryAssist.historyBudgetTargetFraction
+    )
+  );
+  sanitized.memoryAssist.historyContextWindowFallbackTokens = Math.max(
+    4096,
+    Math.min(
+      2_000_000,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.historyContextWindowFallbackTokens
+            ?? DEFAULT_LAW.memoryAssist.historyContextWindowFallbackTokens
+        )
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetEstimateCharsPerToken = Math.max(
+    1,
+    Math.min(
+      12,
+      Number(
+        sanitized.memoryAssist.historyBudgetEstimateCharsPerToken
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetEstimateCharsPerToken
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetPerCandidateOverheadTokens = Math.max(
+    0,
+    Math.min(
+      400,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.historyBudgetPerCandidateOverheadTokens
+            ?? DEFAULT_LAW.memoryAssist.historyBudgetPerCandidateOverheadTokens
+        )
+      )
+    )
+  );
+  sanitized.memoryAssist.maxBudgetedCandidates = Math.max(
+    4,
+    Math.min(
+      500,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.maxBudgetedCandidates
+            ?? DEFAULT_LAW.memoryAssist.maxBudgetedCandidates
+        )
+      )
+    )
+  );
+  sanitized.memoryAssist.minBudgetedCandidates = Math.max(
+    1,
+    Math.min(
+      sanitized.memoryAssist.maxBudgetedCandidates,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.minBudgetedCandidates
+            ?? DEFAULT_LAW.memoryAssist.minBudgetedCandidates
+        )
       )
     )
   );
@@ -1913,11 +2040,14 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     recentDebtTransitions.map((entry) => `${entry.debt}:${entry.action}`).join("\n"),
   ]);
   const gccHistory = collectGccHistoryEvidence(directory, historyQuery);
-  const memoryAssistCandidates = buildMemoryAssistCandidates({
+  const memoryAssistBudget = await resolveMemoryAssistBudget(client, law);
+  const memoryAssistSelection = buildMemoryAssistCandidates({
     law,
     state,
     gccHistory,
+    budget: memoryAssistBudget,
   });
+  const memoryAssistCandidates = memoryAssistSelection.candidates;
   return {
     sessionId,
     recentMessages: summarized,
@@ -1928,6 +2058,10 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     recentDebtTransitions,
     gccHistory,
     memoryAssistCandidates,
+    memoryAssistBudget: {
+      ...memoryAssistBudget,
+      ...memoryAssistSelection.stats,
+    },
     debts: {
       pendingCompactionCheckpoint: state.pendingCompactionCheckpoint,
       pendingCheckpointOverdue: state.pendingCheckpointOverdue,
@@ -2009,6 +2143,16 @@ function buildLawSummaryForInspector(law) {
       triggers: law.memoryAssist.triggers,
       includeAbandonedWarnings: law.memoryAssist.includeAbandonedWarnings,
       cooldownSeconds: law.memoryAssist.cooldownSeconds,
+      historyBudgetEnabled: law.memoryAssist.historyBudgetEnabled,
+      historyBudgetTargetFraction: law.memoryAssist.historyBudgetTargetFraction,
+      historyBudgetMinFraction: law.memoryAssist.historyBudgetMinFraction,
+      historyBudgetMaxFraction: law.memoryAssist.historyBudgetMaxFraction,
+      historyContextWindowFallbackTokens: law.memoryAssist.historyContextWindowFallbackTokens,
+      historyBudgetEstimateCharsPerToken: law.memoryAssist.historyBudgetEstimateCharsPerToken,
+      historyBudgetPerCandidateOverheadTokens:
+        law.memoryAssist.historyBudgetPerCandidateOverheadTokens,
+      maxBudgetedCandidates: law.memoryAssist.maxBudgetedCandidates,
+      minBudgetedCandidates: law.memoryAssist.minBudgetedCandidates,
     },
     cliCapabilities: law.cliCapabilities || {},
     runtime: {
@@ -2122,17 +2266,42 @@ function extractCommitSummaryCandidates(commitText = "", limit = 6) {
     });
     idx += 1;
   }
-  return rows;
+  return rows.slice(-Math.max(1, Number(limit || 1))).reverse();
 }
 
-function buildMemoryAssistCandidates({ law, state, gccHistory }) {
-  const maxCandidates = Number(law?.memoryAssist?.maxCandidates || 8);
+function buildMemoryAssistCandidates({ law, state, gccHistory, budget }) {
+  const legacyMaxCandidates = Number(law?.memoryAssist?.maxCandidates || 8);
   const semantic = Array.isArray(gccHistory?.semanticMatches) ? gccHistory.semanticMatches : [];
-  const commitFallback = extractCommitSummaryCandidates(gccHistory?.files?.commit || "", maxCandidates);
+  const commitFallback = extractCommitSummaryCandidates(gccHistory?.files?.commit || "", Math.max(
+    legacyMaxCandidates,
+    Number(law?.memoryAssist?.maxBudgetedCandidates || DEFAULT_LAW.memoryAssist.maxBudgetedCandidates)
+  ));
   const merged = [...semantic, ...commitFallback];
+  const charsPerToken = Number(
+    budget?.charsPerToken ?? law?.memoryAssist?.historyBudgetEstimateCharsPerToken ?? 4
+  );
+  const overheadTokens = Number(
+    budget?.overheadTokens ?? law?.memoryAssist?.historyBudgetPerCandidateOverheadTokens ?? 24
+  );
+  const historyBudgetEnabled = budget?.enabled === true;
+  const maxBudgetedCandidates = Math.max(
+    1,
+    Number(law?.memoryAssist?.maxBudgetedCandidates || DEFAULT_LAW.memoryAssist.maxBudgetedCandidates)
+  );
+  const minBudgetedCandidates = Math.max(
+    1,
+    Math.min(
+      maxBudgetedCandidates,
+      Number(law?.memoryAssist?.minBudgetedCandidates || DEFAULT_LAW.memoryAssist.minBudgetedCandidates)
+    )
+  );
+  const targetBudgetTokens = historyBudgetEnabled
+    ? Math.max(0, Number(budget?.budgetTokens || 0))
+    : 0;
   const deduped = [];
   const seen = new Set();
   let index = 0;
+  let consumedEstimatedTokens = 0;
   for (const row of merged) {
     const snippet = clipText(row?.snippet || "", 320);
     if (!snippet) continue;
@@ -2145,7 +2314,7 @@ function buildMemoryAssistCandidates({ law, state, gccHistory }) {
     const commandHint = state?.pendingFailureLookup
       ? 'opencontext context --search "<failure or fix topic>" --limit 20'
       : 'opencontext context --search "<feature or decision>" --limit 20';
-    deduped.push({
+    const candidate = {
       id: `${source || "gcc"}:${index + 1}`,
       source,
       type,
@@ -2153,11 +2322,34 @@ function buildMemoryAssistCandidates({ law, state, gccHistory }) {
       summary: snippet,
       command_hint: commandHint,
       memory_ref: source || ".GCC",
-    });
+    };
+    const estimatedTokens = estimateTokensFromText(snippet, charsPerToken, overheadTokens);
+    const withinBudget = !historyBudgetEnabled
+      || targetBudgetTokens <= 0
+      || consumedEstimatedTokens + estimatedTokens <= targetBudgetTokens;
+    if (withinBudget || deduped.length < minBudgetedCandidates) {
+      deduped.push(candidate);
+      consumedEstimatedTokens += estimatedTokens;
+    }
     index += 1;
-    if (deduped.length >= maxCandidates) break;
+    if (historyBudgetEnabled && deduped.length >= maxBudgetedCandidates) break;
+    if (!historyBudgetEnabled && deduped.length >= legacyMaxCandidates) break;
+    if (historyBudgetEnabled && targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens) {
+      if (deduped.length >= minBudgetedCandidates) break;
+    }
   }
-  return deduped;
+  return {
+    candidates: deduped,
+    stats: {
+      enabled: historyBudgetEnabled,
+      targetBudgetTokens,
+      consumedEstimatedTokens,
+      selectedCandidates: deduped.length,
+      maxBudgetedCandidates,
+      minBudgetedCandidates,
+      legacyMaxCandidates,
+    },
+  };
 }
 
 function shouldInspectCustomRuleForTrigger(rule, trigger) {
@@ -2436,6 +2628,199 @@ function resolveCriticEndpoint(law) {
   const baseUrl = String(law?.critic?.baseUrl || DEFAULT_LAW.critic.baseUrl).replace(/\/+$/, "");
   const endpointPath = `/${String(law?.critic?.endpointPath || DEFAULT_LAW.critic.endpointPath).replace(/^\/+/, "")}`;
   return `${baseUrl}${endpointPath}`;
+}
+
+function resolveCriticBaseUrl(law) {
+  return String(law?.critic?.baseUrl || DEFAULT_LAW.critic.baseUrl).replace(/\/+$/, "");
+}
+
+function buildEndpointCandidates(baseUrl, path) {
+  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const cleanPath = `/${String(path || "").replace(/^\/+/, "")}`;
+  const candidates = [`${cleanBase}${cleanPath}`];
+  if (!cleanBase.endsWith("/v1") && !cleanBase.includes("/v1/")) {
+    candidates.push(`${cleanBase}/v1${cleanPath}`);
+  }
+  if (cleanBase.endsWith("/v1")) {
+    const root = cleanBase.slice(0, -3).replace(/\/+$/, "");
+    if (root) candidates.push(`${root}${cleanPath}`);
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const url of candidates) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    deduped.push(url);
+  }
+  return deduped;
+}
+
+function normalizeModelIdentifier(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function extractModelRowsFromPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.models)) return payload.models;
+  return [];
+}
+
+function coercePositiveNumber(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n);
+}
+
+function extractModelMaxInputTokens(modelRow) {
+  if (!modelRow || typeof modelRow !== "object") return 0;
+  const candidates = [
+    modelRow.max_input_tokens,
+    modelRow.max_prompt_tokens,
+    modelRow.context_window,
+    modelRow.context_length,
+    modelRow.max_context_length,
+    modelRow.input_token_limit,
+    modelRow?.limits?.max_input_tokens,
+    modelRow?.limits?.max_prompt_tokens,
+    modelRow?.limits?.context_window,
+    modelRow?.capabilities?.max_input_tokens,
+    modelRow?.capabilities?.context_window,
+  ];
+  for (const value of candidates) {
+    const parsed = coercePositiveNumber(value);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function estimateTokensFromText(text, charsPerToken = 4, overheadTokens = 24) {
+  const bodyChars = String(text || "").length;
+  const perToken = Math.max(1, Number(charsPerToken || 4));
+  const estimatedBody = Math.ceil(bodyChars / perToken);
+  const overhead = Math.max(0, Number(overheadTokens || 0));
+  return Math.max(1, estimatedBody + overhead);
+}
+
+function clampNumber(value, minValue, maxValue) {
+  return Math.max(minValue, Math.min(maxValue, value));
+}
+
+async function resolveWatchmanModelInputTokens(client, law) {
+  const model = resolveCriticModel(law);
+  const override = coercePositiveNumber(law?.critic?.maxInputTokensOverride);
+  if (override > 0) {
+    return {
+      tokens: override,
+      model,
+      source: "override",
+      metadataUrl: "",
+    };
+  }
+
+  const baseUrl = resolveCriticBaseUrl(law);
+  const cacheKey = `${baseUrl}::${model}`;
+  if (Date.now() - modelMetadataCache.fetchedAt <= CONFIG.modelMetadataCacheMs) {
+    const cached = modelMetadataCache.items?.[cacheKey];
+    if (cached && coercePositiveNumber(cached.tokens) > 0) {
+      return cached;
+    }
+  }
+
+  const fallbackTokens = coercePositiveNumber(
+    law?.memoryAssist?.historyContextWindowFallbackTokens
+  ) || DEFAULT_LAW.memoryAssist.historyContextWindowFallbackTokens;
+  const fallback = {
+    tokens: fallbackTokens,
+    model,
+    source: "fallback_128k",
+    metadataUrl: "",
+  };
+
+  if (!law?.critic?.enabled) return fallback;
+  const { apiKey } = resolveCriticApiKey(law);
+  const headers = buildCriticHeaders(law, apiKey);
+  const modelUrls = buildEndpointCandidates(baseUrl, "/models");
+  let resolved = null;
+  for (const url of modelUrls) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers,
+      });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const rows = extractModelRowsFromPayload(payload);
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      const normalizedModel = normalizeModelIdentifier(model);
+      const exact = rows.find((row) => normalizeModelIdentifier(row?.id) === normalizedModel);
+      const contains = exact || rows.find((row) => {
+        const rowId = normalizeModelIdentifier(row?.id);
+        return rowId && normalizedModel && rowId.includes(normalizedModel);
+      });
+      const tokenCount = extractModelMaxInputTokens(contains || rows[0]);
+      if (tokenCount <= 0) continue;
+      resolved = {
+        tokens: tokenCount,
+        model,
+        source: "model_metadata",
+        metadataUrl: url,
+      };
+      break;
+    } catch {
+      // Ignore metadata lookup errors; fallback is intentional.
+    }
+  }
+
+  const result = resolved || fallback;
+  modelMetadataCache.fetchedAt = Date.now();
+  modelMetadataCache.items = {
+    ...(modelMetadataCache.items || {}),
+    [cacheKey]: result,
+  };
+  return result;
+}
+
+async function resolveMemoryAssistBudget(client, law) {
+  const budgetEnabled = law?.memoryAssist?.historyBudgetEnabled !== false;
+  const budgetTargetFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetTargetFraction ?? DEFAULT_LAW.memoryAssist.historyBudgetTargetFraction),
+    0.05,
+    0.95
+  );
+  const minFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetMinFraction ?? DEFAULT_LAW.memoryAssist.historyBudgetMinFraction),
+    0.05,
+    0.95
+  );
+  const maxFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetMaxFraction ?? DEFAULT_LAW.memoryAssist.historyBudgetMaxFraction),
+    0.05,
+    0.95
+  );
+  const lower = Math.min(minFraction, maxFraction);
+  const upper = Math.max(minFraction, maxFraction);
+  const target = clampNumber(budgetTargetFraction, lower, upper);
+  const modelWindow = await resolveWatchmanModelInputTokens(client, law);
+  const contextWindowTokens = coercePositiveNumber(modelWindow?.tokens)
+    || DEFAULT_LAW.memoryAssist.historyContextWindowFallbackTokens;
+  const budgetTokens = budgetEnabled
+    ? Math.max(256, Math.floor(contextWindowTokens * target))
+    : 0;
+  return {
+    enabled: budgetEnabled,
+    model: modelWindow?.model || resolveCriticModel(law),
+    source: modelWindow?.source || "fallback_128k",
+    metadataUrl: modelWindow?.metadataUrl || "",
+    contextWindowTokens,
+    targetFraction: target,
+    minFraction: lower,
+    maxFraction: upper,
+    budgetTokens,
+    charsPerToken: Number(law?.memoryAssist?.historyBudgetEstimateCharsPerToken ?? 4),
+    overheadTokens: Number(law?.memoryAssist?.historyBudgetPerCandidateOverheadTokens ?? 24),
+  };
 }
 
 function buildCriticHeaders(law, apiKey) {
@@ -3842,6 +4227,7 @@ async function evaluateAndEnforce({
       recentToolCalls: evidence.recentToolCalls,
       gccHistory: evidence.gccHistory,
       memoryAssistCandidates: evidence.memoryAssistCandidates,
+      memoryAssistBudget: evidence.memoryAssistBudget,
       debts: evidence.debts,
       customRuleCounters: state.customRuleViolations,
       deterministicCandidates: [...violations, ...modelDebtCandidates].map((violation) => ({
@@ -3870,8 +4256,13 @@ async function evaluateAndEnforce({
         },
         memoryAssistCandidates: (evidence?.memoryAssistCandidates || []).slice(
           0,
-          Number(law?.memoryAssist?.maxCandidates || 8)
+          Number(
+            law?.memoryAssist?.historyBudgetEnabled
+              ? law?.memoryAssist?.maxBudgetedCandidates || 160
+              : law?.memoryAssist?.maxCandidates || 8
+          )
         ),
+        memoryAssistBudget: evidence?.memoryAssistBudget || {},
         debts: evidence.debts,
         customRuleCounters: state.customRuleViolations,
         lawPolicyText: clipText(law?.custom?.policyText || "", 1200),

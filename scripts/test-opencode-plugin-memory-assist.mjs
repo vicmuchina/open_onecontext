@@ -136,6 +136,20 @@ const oldApiKey = process.env.CHUTES_API_KEY;
 process.env.CHUTES_API_KEY = "test-key";
 
 global.fetch = async (_url, options = {}) => {
+  const method = String(options?.method || "POST").toUpperCase();
+  if (method === "GET") {
+    return {
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            id: "zai-org/GLM-4.7-Flash",
+            max_input_tokens: 128000,
+          },
+        ],
+      }),
+    };
+  }
   fetchPayloads.push(JSON.parse(String(options?.body || "{}")));
   return {
     ok: true,
@@ -209,6 +223,10 @@ try {
   const watchmanPayload = JSON.parse(String(watchmanPayloadRaw));
   if (!Array.isArray(watchmanPayload.memoryAssistCandidates)) {
     console.error("FAIL  watchman payload missing memoryAssistCandidates");
+    process.exit(1);
+  }
+  if (!watchmanPayload.memoryAssistBudget || !watchmanPayload.memoryAssistBudget.contextWindowTokens) {
+    console.error("FAIL  watchman payload missing memoryAssistBudget context metadata");
     process.exit(1);
   }
   if (watchmanPayload.memoryAssistCandidates.length === 0) {

@@ -133,6 +133,28 @@ Deterministic debt triggers based on simple patterns are brittle in dynamic Open
   - no separate vector DB/service in this phase
   - rely on local GCC files + semantic overlap scoring + watchman adjudication
 
+### Continuation Checkpoint (2026-02-20, Dynamic Context-Budgeted Memory Assist)
+
+- Requirement implemented in this pass:
+  - memory-assist candidate volume is now sized by token budget, not fixed candidate count.
+- Added provider-aware context-window resolution:
+  - resolves watchman model max input tokens from OpenAI-compatible model endpoints (`/models`, `/v1/models` fallback)
+  - caches metadata lookups
+  - fallback defaults to `128000` tokens when metadata is missing
+  - optional hard override via `critic.maxInputTokensOverride`
+- Added budgeted selection controls (law config):
+  - `memoryAssist.historyBudgetEnabled`
+  - `memoryAssist.historyBudgetTargetFraction`
+  - `memoryAssist.historyBudgetMinFraction`
+  - `memoryAssist.historyBudgetMaxFraction`
+  - `memoryAssist.historyContextWindowFallbackTokens`
+  - `memoryAssist.historyBudgetEstimateCharsPerToken`
+  - `memoryAssist.historyBudgetPerCandidateOverheadTokens`
+  - `memoryAssist.maxBudgetedCandidates`
+  - `memoryAssist.minBudgetedCandidates`
+- Added watchman evidence telemetry:
+  - `memoryAssistBudget` is attached to watchman payload/trace with source (`override`, `model_metadata`, or fallback), context window, and consumed budget estimates.
+
 ## Problem
 One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
 - GCC/OpenContext checkpoint discipline

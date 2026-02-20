@@ -57,6 +57,7 @@
     ],
     "apiKeyEnv": "CHUTES_API_KEY",
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
+    "maxInputTokensOverride": 0,
     "timeoutMs": 8000,
     "maxTokensCritic": 120,
     "maxTokensWatchman": 320,
@@ -93,7 +94,16 @@
       "assistant_turn"
     ],
     "includeAbandonedWarnings": true,
-    "cooldownSeconds": 120
+    "cooldownSeconds": 120,
+    "historyBudgetEnabled": true,
+    "historyBudgetTargetFraction": 0.35,
+    "historyBudgetMinFraction": 0.30,
+    "historyBudgetMaxFraction": 0.40,
+    "historyContextWindowFallbackTokens": 128000,
+    "historyBudgetEstimateCharsPerToken": 4,
+    "historyBudgetPerCandidateOverheadTokens": 24,
+    "maxBudgetedCandidates": 160,
+    "minBudgetedCandidates": 8
   },
   "custom": {
     "enabled": true,

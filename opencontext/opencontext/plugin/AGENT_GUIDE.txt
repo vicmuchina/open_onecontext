@@ -19,6 +19,11 @@ Enforcement style:
 - Do not rely on fixed idle/action-count/context-usage checkpoint reminders.
 - Follow explicit watchman correction prompts and current debt flags.
 - Memory help is suggestion-first: use high-confidence prior GCC insights as guidance, not forced interruption.
+- Memory candidate retrieval is token-budgeted by default:
+  - target fraction: 0.35 of watchman model context
+  - bounds: 0.30 to 0.40
+  - fallback context window when metadata is missing: 128000 tokens
+  - override with `critic.maxInputTokensOverride` when provider metadata is unreliable
 
 When provider/model is missing, ask the user:
 - provider type/base URL

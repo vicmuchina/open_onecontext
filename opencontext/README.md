@@ -371,6 +371,11 @@ Decision model (plain terms):
 - Research capture debt is model-judged first (via `.GCC/law-research-policy.txt`).
 - Watchman interruption is model-judged with confidence threshold (`watchman.minConfidence`) and optional model-only mode (`watchman.requireModelDecision`).
 - Watchman memory assistance is suggestion-only and confidence-gated (`memoryAssist.minSuggestConfidence`).
+- Memory-assist history payload is token-budgeted by default:
+  - target: `memoryAssist.historyBudgetTargetFraction` (default `0.35`)
+  - bounds: `memoryAssist.historyBudgetMinFraction` / `memoryAssist.historyBudgetMaxFraction` (default `0.30` / `0.40`)
+  - fallback context window: `memoryAssist.historyContextWindowFallbackTokens` (default `128000`)
+  - optional hard override: `critic.maxInputTokensOverride`
 - Default watchman system prompt is precision-biased to reduce noise (read-only exploration/setup/CLI noise should not interrupt unless clearly actionable).
 - Lightweight pattern checks are only a trigger/fallback safety net.
 - If you want model-only judgment (no fallback decisions), set:

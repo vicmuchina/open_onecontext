@@ -140,6 +140,23 @@ In `.GCC/`:
   - reuse existing watchman payload and GCC evidence collection
   - keep `inspectToolCalls=false` and `inspectOnIdle=false` defaults for low-noise operation
 
+### Continuation Checkpoint (2026-02-20, Token-Budgeted Watchman Memory Context)
+
+- Requirement locked: memory-assist history payload must use a fraction of watchman context window instead of fixed commit count.
+- Default policy locked:
+  - target fraction: `35%`
+  - bounded range: `30%` to `40%`
+  - fallback context window: `128000` tokens when provider metadata is unavailable
+- Implementation contract:
+  - resolve watchman model context window from provider model metadata (`/models` with `/v1/models` fallback)
+  - allow hard override with `critic.maxInputTokensOverride`
+  - compute `budgetTokens = contextWindowTokens * targetFraction`
+  - select memory-assist candidates until budget is consumed (with min/max candidate clamps)
+  - include budget diagnostics in watchman evidence payload/trace (`memoryAssistBudget`)
+- Non-goals:
+  - no separate vector store service
+  - no extra model call beyond existing watchman cycle
+
 ---
 
 ## Architecture
