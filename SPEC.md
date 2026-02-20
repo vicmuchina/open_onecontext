@@ -47,6 +47,7 @@ This upgrade is now the intended architecture and should be preserved in future 
 - Model availability mode: strict model-only for policy judgment (no deterministic hard interrupt on model parse/unavailable paths).
 - Lookup scope: recent-first plus semantic history retrieval.
 - Interruption threshold: high-confidence only.
+- Checkpoint and compaction debt defaults use model-judged modes (`checkpointDebtJudgeMode=model_only`, `compactionDebtJudgeMode=model_only`) with deterministic modes available when teams want stricter automation.
 
 ### Required Policy Inputs
 
@@ -62,6 +63,8 @@ In `.GCC/`:
 - Latest assistant intent/output.
 - Recent session transcript + tool calls.
 - Current debt/open-rule state.
+- Recent interruption history (`recentInterruptions`) and post-alert actions (`postAlertActions`).
+- Recent debt transitions (`recentDebtTransitions`) to help avoid repeated, already-satisfied interruptions.
 - Recent GCC commits/logs/metadata summaries.
 - Semantic matches to prior solved/similar hurdles.
 
@@ -71,6 +74,8 @@ In `.GCC/`:
 - Failure debt is set/cleared by model judgment (with configurable model-only gate).
 - Interruption decision uses model output + confidence threshold.
 - Trace logs record request, verdict, confidence, evidence subset, and reason.
+- Watchman can return `debt_updates` to open/clear checkpoint and compaction debt explicitly.
+- Repeated interruption loops are suppressed by combining unresolved-rule dedupe with satisfaction evidence from recent actions.
 
 ### Continuation Checkpoint (2026-02-19)
 
@@ -81,6 +86,28 @@ In `.GCC/`:
 - Remaining follow-up:
   - tune confidence thresholds/policies from live usage trace data
   - extend semantic retrieval scoring if future repos need deeper history matching
+
+### Continuation Checkpoint (2026-02-20)
+
+- Added model-memory evidence in watchman payload:
+  - `recentInterruptions`
+  - `postAlertActions`
+  - `recentDebtTransitions`
+- Added watchman output extensions:
+  - `satisfaction_evidence`
+  - `debt_updates.pendingCheckpointOverdue`
+  - `debt_updates.pendingCompactionCheckpoint`
+- Added tool-flow state markers:
+  - `lastCompactionAt`
+  - `lastCommitAt`
+  - `lastContextRecoveryAt`
+- Added configurable judge modes:
+  - `gcc.checkpointDebtJudgeMode`
+  - `gcc.compactionDebtJudgeMode`
+- Default watchman noise controls kept conservative:
+  - `watchman.inspectToolCalls=false`
+  - `watchman.inspectOnIdle=false`
+  - higher confidence gate (`watchman.minConfidence=0.75`)
 
 ---
 
@@ -475,13 +502,15 @@ The plugin is a continuous watchman. It inspects the active session and can inte
 - `tool.execute.after`: track action debts and detect immediate workflow violations
 - `message.updated` (assistant completion): inspect each full assistant response
 - `session.idle`: run a safety inspection pass
-- `session.compacted`: enforce checkpoint + recovery path
+- `session.compacted`: record compaction event; deterministic mode can open debt immediately, model mode judges recovery need from evidence
 
 #### AI Watchman Evaluation
 On assistant completion, the plugin collects:
 - latest assistant output
 - recent transcript window from session APIs
 - recent tool calls and outputs
+- recent interruption records and post-alert actions
+- recent debt transitions
 - policy/debt state (checkpoint overdue, failure lookup pending, research capture pending)
 - custom rule counters + custom hints
 - plain-text law policy and optional agent guide excerpt
@@ -493,6 +522,11 @@ Required watchman fields:
 - `reason`
 - `correction_prompt` (AI-generated correction text)
 - `confidence`
+Optional watchman fields:
+- `satisfaction_evidence`
+- `debt_updates`:
+  - `pendingCheckpointOverdue`: `open | clear | keep`
+  - `pendingCompactionCheckpoint`: `open | clear | keep`
 
 If model output is malformed/non-JSON, plugin retries in strict JSON-only mode (configurable) before skipping enforcement and logging parse failure.
 When `violation` is true with valid schema output, the plugin injects `correction_prompt` via `client.session.promptAsync` in the same session, interrupting and redirecting workflow.

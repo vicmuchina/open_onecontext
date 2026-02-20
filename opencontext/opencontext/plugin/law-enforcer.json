@@ -11,12 +11,14 @@
   "gcc": {
     "requireInit": true,
     "requireCheckpointEveryTools": 10,
+    "checkpointDebtJudgeMode": "model_only",
     "requireFailedAttemptLookup": true,
     "failureLookupPolicyFile": "law-failure-policy.txt",
     "failureClassifierEnabled": true,
     "failureClassifierMinConfidence": 0.7,
     "failureClassifierRequireModelDecision": true,
     "compactionCheckpointRequired": true,
+    "compactionDebtJudgeMode": "model_only",
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false
   },
@@ -73,7 +75,9 @@
     "requireModelDecision": true,
     "systemPromptFile": "law-watchman-system.txt",
     "includeRecentMessages": 12,
-    "includeRecentToolCalls": 12
+    "includeRecentToolCalls": 12,
+    "includeRecentAlerts": 12,
+    "includeRecentActionsAfterAlerts": 20
   },
   "observability": {
     "traceEnabled": true,

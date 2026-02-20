@@ -728,12 +728,13 @@ The OpenCode plugin hooks into OpenCode's event system:
 
 2. **Context Compacted** (`session.compacted`)
    - Triggered when OpenCode truncates context
-   - Marks compaction checkpoint debt
-   - Enforces checkpoint + recovery sequence
+   - Records compaction timestamp and recovery context
+   - In deterministic mode: opens compaction debt immediately
+   - In model modes: watchman judges whether compaction debt should open/clear based on post-alert actions
 
 3. **Tool Execution** (`tool.execute.after`)
    - Tracks every tool execution
-   - Updates debt state and deterministic/custom rule checks
+   - Updates debt state, debt transitions, and deterministic/custom rule checks
    - Optional watchman inspection on tool activity when `watchman.inspectToolCalls=true` (default is `false` for lower-noise operation)
    - Tracks research/failure/MCP workflow debts
 
@@ -748,6 +749,9 @@ The OpenCode plugin hooks into OpenCode's event system:
 - Provider API: OpenAI-compatible `POST /chat/completions`
 - Request uses structured `response_format` (default `json_schema`, optional fallback `json_object`)
 - Required output fields: `violation`, `rule`, `reason`, `correction_prompt`, `confidence`
+- Optional output fields: `satisfaction_evidence`, `debt_updates`
+  - `debt_updates.pendingCheckpointOverdue`: `open|clear|keep`
+  - `debt_updates.pendingCompactionCheckpoint`: `open|clear|keep`
 - Malformed/free-text responses trigger strict retry first, then are logged as parse errors if still invalid
 
 ## Evolution Tracking
@@ -819,11 +823,14 @@ Example `law-runtime.json`:
 {
   "gcc": {
     "requireCheckpointEveryTools": 10,
+    "checkpointDebtJudgeMode": "model_only",
     "requireFailedAttemptLookup": true,
     "failureLookupPolicyFile": "law-failure-policy.txt",
     "failureClassifierEnabled": true,
     "failureClassifierMinConfidence": 0.7,
     "failureClassifierRequireModelDecision": true,
+    "compactionCheckpointRequired": true,
+    "compactionDebtJudgeMode": "model_only",
     "skipCheckpointDuringPlanningAgent": true,
     "countReadOnlyToolsForCheckpoint": false
   },
@@ -859,7 +866,9 @@ Example `law-runtime.json`:
     "dedupeSameViolationUntilResolved": true,
     "minConfidence": 0.75,
     "requireModelDecision": true,
-    "systemPromptFile": "law-watchman-system.txt"
+    "systemPromptFile": "law-watchman-system.txt",
+    "includeRecentAlerts": 12,
+    "includeRecentActionsAfterAlerts": 20
   },
   "custom": {
     "policyFile": "law-policy.txt",

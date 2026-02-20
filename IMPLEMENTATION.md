@@ -63,16 +63,45 @@ Deterministic debt triggers based on simple patterns are brittle in dynamic Open
 - Added short CLI shortcut `opencontext io` for formatted watchman request/response live tail.
 - Upgraded `scripts/chutes_json_benchmark.py` to benchmark Chutes and generic OpenAI-compatible providers with endpoint discovery and runtime auto-write support.
 - Expanded generated `AGENT_GUIDE.txt` instructions so agents ask operator bootstrap questions (provider URL, key env, runtime scope, benchmark intent) before guessing config.
+- Added model-memory evidence in watchman payload (`recentInterruptions`, `postAlertActions`, `recentDebtTransitions`) to reduce repeated alerts after already-satisfied actions.
+- Added watchman optional structured fields: `satisfaction_evidence` and `debt_updates` (checkpoint/compaction open-clear-keep).
+- Added model-judged debt controls in policy:
+  - `gcc.checkpointDebtJudgeMode`
+  - `gcc.compactionDebtJudgeMode`
+- Added runtime timestamps in session state for recovery reasoning:
+  - `lastCompactionAt`
+  - `lastCommitAt`
+  - `lastContextRecoveryAt`
+- Tuned default strictness/noise:
+  - `watchman.inspectToolCalls=false`
+  - `watchman.inspectOnIdle=false`
+  - `watchman.minConfidence=0.75`
 
 ### Remaining
 
 - Run live `opencode`/`opencode serve` smoke loops and tune policy prompts from trace evidence.
 - Expand optional semantic-history retrieval depth if required by larger repositories.
+- Continue validating model-only checkpoint/compaction behavior under frequent compactions to ensure no false re-interruption loops.
 
 ### Continuation Checkpoint (2026-02-19)
 
 - Completed priorities 1-3 in this iteration.
 - Next session should focus on live enforcement tuning (confidence/prompt calibration), not architecture changes.
+
+### Continuation Checkpoint (2026-02-20)
+
+- Plugin now tracks interruption/action/debt-transition memory and passes it to watchman.
+- Watchman can explicitly open/clear checkpoint and compaction debt via structured `debt_updates`.
+- CLI validation/status now includes:
+  - `gcc.checkpointDebtJudgeMode`
+  - `gcc.compactionDebtJudgeMode`
+  - `watchman.includeRecentAlerts`
+  - `watchman.includeRecentActionsAfterAlerts`
+- Law templates (`law-enforcer.json/.yaml`) and watchman system prompt updated to match these fields.
+- In-progress work completed for `tool.execute.after`:
+  - state timestamps for commit/context recovery
+  - deterministic checkpoint debt state transitions when deterministic modes are selected
+  - debt transition recording on classifier open/clear actions
 
 ## Problem
 One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
@@ -96,7 +125,7 @@ The plugin stays at `opencontext-reminder.js` for compatibility, but enforcement
 5. Run AI watchman model on each assistant turn (when enabled) to decide violation/no-violation and generate corrective prompt text
 6. Inject corrective continuation in the same session via `client.session.promptAsync`
 7. Apply anti-loop controls (cooldowns, same-rule cooldown, max consecutive injections, in-flight guards)
-8. Fall back to deterministic rule checks if watchman model is unavailable
+8. Fall back to deterministic checks for hard invariants and configured deterministic debt modes
 9. Require structured JSON-schema responses from watchman/critic (OpenAI-compatible `response_format`), with strict retry on malformed outputs and no free-text fallback interruption
 
 ## v3 Solution Overview (User-Programmable Laws)
@@ -132,7 +161,7 @@ To avoid hardcoded enforcement and make future customization agent-friendly:
   - Recent transcript window
   - Recent tool calls and outcomes
   - Session debt flags (checkpoint/failure lookup/research capture)
-- Deterministic checks still run for hard requirements (e.g. GCC init, compaction checkpoint).
+- Deterministic checks still run for hard requirements (`gcc_init_required`) and for debts configured in deterministic mode.
 - Planning guard defaults avoid false interruptions during planner turns:
   - `gcc.skipCheckpointDuringPlanningAgent=true`
   - `watchman.skipDuringPlanningAgent=true`

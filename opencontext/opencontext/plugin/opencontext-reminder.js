@@ -42,26 +42,28 @@ const DEFAULT_LAW = {
   },
   gcc: {
     requireInit: true,
-    requireCheckpointEveryTools: 6,
+    requireCheckpointEveryTools: 10,
+    checkpointDebtJudgeMode: "model_only",
     requireFailedAttemptLookup: true,
     failureLookupPolicyFile: "law-failure-policy.txt",
     failureClassifierEnabled: true,
-    failureClassifierMinConfidence: 0.55,
+    failureClassifierMinConfidence: 0.7,
     failureClassifierRequireModelDecision: true,
     compactionCheckpointRequired: true,
+    compactionDebtJudgeMode: "model_only",
     skipCheckpointDuringPlanningAgent: true,
     countReadOnlyToolsForCheckpoint: false,
   },
   mcp: {
     requireAwarenessAtSessionStart: true,
     requireUseWhenRelevant: true,
-    usageReminderEveryTools: 4,
+    usageReminderEveryTools: 8,
   },
   research: {
     requireCaptureOnDocsOrGithub: true,
     capturePolicyFile: "law-research-policy.txt",
     captureClassifierEnabled: true,
-    captureClassifierMinConfidence: 0.55,
+    captureClassifierMinConfidence: 0.7,
     captureClassifierRequireModelDecision: true,
     docsKeywords: ["docs", "readme", "documentation", "arxiv.org"],
   },
@@ -91,16 +93,18 @@ const DEFAULT_LAW = {
   watchman: {
     enabled: true,
     inspectAssistantTurns: true,
-    inspectToolCalls: true,
+    inspectToolCalls: false,
     inspectCompaction: true,
-    inspectOnIdle: true,
+    inspectOnIdle: false,
     skipDuringPlanningAgent: true,
     dedupeSameViolationUntilResolved: true,
-    minConfidence: 0.65,
+    minConfidence: 0.75,
     requireModelDecision: true,
     systemPromptFile: "law-watchman-system.txt",
     includeRecentMessages: 12,
     includeRecentToolCalls: 12,
+    includeRecentAlerts: 12,
+    includeRecentActionsAfterAlerts: 20,
   },
   observability: {
     traceEnabled: true,
@@ -112,9 +116,9 @@ const DEFAULT_LAW = {
     exemptAgentPatterns: ["plan", "planner"],
     escalation: {
       mode: "soft_then_hard",
-      softViolationsBeforeInterrupt: 1,
-      hardInterruptThreshold: 2,
-      reminderCooldownSeconds: 20,
+      softViolationsBeforeInterrupt: 2,
+      hardInterruptThreshold: 3,
+      reminderCooldownSeconds: 60,
       resetOnCommit: true,
     },
     rules: [],
@@ -179,6 +183,21 @@ const WATCHMAN_RESPONSE_SCHEMA = {
     reason: { type: "string" },
     correction_prompt: { type: "string" },
     confidence: { type: "number" },
+    satisfaction_evidence: { type: "string" },
+    debt_updates: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        pendingCompactionCheckpoint: {
+          type: "string",
+          enum: ["open", "clear", "keep"],
+        },
+        pendingCheckpointOverdue: {
+          type: "string",
+          enum: ["open", "clear", "keep"],
+        },
+      },
+    },
   },
 };
 
@@ -216,6 +235,7 @@ function getSessionState(sessionId) {
       consecutiveInjections: 0,
       lastResearchReminderTime: 0,
       pendingCompactionCheckpoint: false,
+      pendingCheckpointOverdue: false,
       pendingResearchCapture: false,
       pendingFailureLookup: false,
       mcpUsed: false,
@@ -231,6 +251,11 @@ function getSessionState(sessionId) {
       customRuleViolations: {},
       customRuleReminderAt: {},
       ruleDebtOpen: {},
+      recentInterruptions: [],
+      recentDebtTransitions: [],
+      lastCompactionAt: 0,
+      lastCommitAt: 0,
+      lastContextRecoveryAt: 0,
     });
   }
   return sessionStateById.get(resolvedSessionId);
@@ -263,6 +288,20 @@ function appendRecentToolExecution(state, payload) {
   if (state.recentToolExecutions.length > CONFIG.maxRecentToolExecutions) {
     state.recentToolExecutions.shift();
   }
+}
+
+function appendBounded(list, item, limit = 20) {
+  if (!Array.isArray(list)) return;
+  list.push(item);
+  while (list.length > Math.max(1, Number(limit || 1))) {
+    list.shift();
+  }
+}
+
+function toEpochMs(value) {
+  if (!value) return 0;
+  const ms = Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function extractMessageText(parts) {
@@ -581,6 +620,14 @@ function toBool(value, fallback) {
   return fallback;
 }
 
+function normalizeDebtJudgeMode(value, fallback = "model_only") {
+  const mode = String(value || fallback).trim().toLowerCase();
+  if (["model_only", "model_first_fallback", "deterministic"].includes(mode)) {
+    return mode;
+  }
+  return fallback;
+}
+
 function sanitizeLaw(law) {
   const sanitized = deepMerge(DEFAULT_LAW, law || {});
   if (!Number.isFinite(sanitized.gcc.requireCheckpointEveryTools)) {
@@ -589,6 +636,10 @@ function sanitizeLaw(law) {
   sanitized.gcc.requireCheckpointEveryTools = Math.max(
     2,
     Math.min(50, Math.round(sanitized.gcc.requireCheckpointEveryTools))
+  );
+  sanitized.gcc.checkpointDebtJudgeMode = normalizeDebtJudgeMode(
+    sanitized.gcc.checkpointDebtJudgeMode,
+    DEFAULT_LAW.gcc.checkpointDebtJudgeMode
   );
   if (!Number.isFinite(sanitized.mcp.usageReminderEveryTools)) {
     sanitized.mcp.usageReminderEveryTools = DEFAULT_LAW.mcp.usageReminderEveryTools;
@@ -632,6 +683,10 @@ function sanitizeLaw(law) {
   );
   sanitized.gcc.failureClassifierRequireModelDecision =
     sanitized.gcc.failureClassifierRequireModelDecision !== false;
+  sanitized.gcc.compactionDebtJudgeMode = normalizeDebtJudgeMode(
+    sanitized.gcc.compactionDebtJudgeMode,
+    DEFAULT_LAW.gcc.compactionDebtJudgeMode
+  );
   if (!sanitized.critic.provider || typeof sanitized.critic.provider !== "string") {
     sanitized.critic.provider = "openai_compatible";
   }
@@ -731,6 +786,14 @@ function sanitizeLaw(law) {
   sanitized.watchman.includeRecentToolCalls = Math.max(
     2,
     Math.min(50, Number(sanitized.watchman.includeRecentToolCalls || 12))
+  );
+  sanitized.watchman.includeRecentAlerts = Math.max(
+    2,
+    Math.min(50, Number(sanitized.watchman.includeRecentAlerts || 12))
+  );
+  sanitized.watchman.includeRecentActionsAfterAlerts = Math.max(
+    2,
+    Math.min(80, Number(sanitized.watchman.includeRecentActionsAfterAlerts || 20))
   );
   sanitized.observability = sanitized.observability && typeof sanitized.observability === "object"
     ? sanitized.observability
@@ -1000,14 +1063,17 @@ function defaultWatchmanSystemPrompt() {
     "You are the OpenContext Law Enforcer Watchman.",
     "Judge workflow-law compliance using provided law summary, policy text, agent guide, messages, tool calls, and debt flags.",
     "Return STRICT JSON only (no prose/markdown) matching schema fields exactly.",
+    "You may return debt_updates to open/clear/keep checkpoint and compaction debt.",
     "Critical behavior:",
     "- Do not request duplicate interruption for the exact same unresolved violation without new evidence.",
+    "- Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied before alerting again.",
     "- For failed-attempt workflow, only flag violations for actionable implementation retries.",
     "- Treat pure environment/setup/CLI-usage noise as non-actionable unless policy explicitly says otherwise.",
     "- Interrupt only when there is a clear immediate corrective action the agent can perform.",
     "- Do not interrupt read-only discovery/exploration (listing files, reading docs, checking help/usage) unless policy explicitly marks it actionable.",
     "- Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient setup/network/dependency noise) unless repeated behavior clearly blocks implementation.",
     "- Interruption is expensive; if evidence is ambiguous, prefer violation=false and lower confidence.",
+    "- For non-critical workflow issues, prefer persistent/repeated signals before interrupting.",
   ].join("\n");
 }
 
@@ -1690,10 +1756,56 @@ async function collectWatchmanEvidence(client, law, state, directory) {
   }
 
   const recentToolCalls = state.recentToolExecutions.slice(-law.watchman.includeRecentToolCalls);
+  const recentInterruptions = (state.recentInterruptions || [])
+    .slice(-law.watchman.includeRecentAlerts)
+    .map((entry) => ({
+      at: entry.at,
+      rule: entry.rule,
+      detail: clipText(entry.detail || "", 220),
+      source: entry.source || "",
+      trigger: entry.trigger || "",
+    }));
+
+  const latestInterruptionAt = recentInterruptions.length > 0
+    ? toEpochMs(recentInterruptions[recentInterruptions.length - 1].at)
+    : 0;
+  const postAlertActions = (state.recentToolExecutions || [])
+    .filter((entry) => {
+      if (!latestInterruptionAt) return true;
+      const at = toEpochMs(entry?.time);
+      return at >= latestInterruptionAt;
+    })
+    .slice(-law.watchman.includeRecentActionsAfterAlerts)
+    .map((entry) => {
+      const commandText = clipText(entry?.commandText || "", 240);
+      return {
+        time: entry?.time || "",
+        tool: entry?.tool || "",
+        commandText,
+        isCommit: isOpenContextCommitCommand(commandText),
+        isContextLookup: isOpenContextContextLookup(commandText),
+      };
+    });
+
+  const recentDebtTransitions = (state.recentDebtTransitions || [])
+    .slice(-20)
+    .map((entry) => ({
+      at: entry.at,
+      source: entry.source || "",
+      debt: entry.debt || "",
+      action: entry.action || "",
+      rule: entry.rule || "",
+      before: Boolean(entry.before),
+      after: Boolean(entry.after),
+    }));
+
   const historyQuery = buildHistoryQueryFromState(state, [
     latestAssistant?.text || "",
     recentToolCalls.map((entry) => entry?.commandText || "").join("\n"),
     recentToolCalls.map((entry) => entry?.output || "").join("\n"),
+    recentInterruptions.map((entry) => `${entry.rule} ${entry.detail}`).join("\n"),
+    postAlertActions.map((entry) => entry.commandText || "").join("\n"),
+    recentDebtTransitions.map((entry) => `${entry.debt}:${entry.action}`).join("\n"),
   ]);
   const gccHistory = collectGccHistoryEvidence(directory, historyQuery);
   return {
@@ -1701,14 +1813,22 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     recentMessages: summarized,
     latestAssistant,
     recentToolCalls,
+    recentInterruptions,
+    postAlertActions,
+    recentDebtTransitions,
     gccHistory,
     debts: {
       pendingCompactionCheckpoint: state.pendingCompactionCheckpoint,
+      pendingCheckpointOverdue: state.pendingCheckpointOverdue,
       pendingResearchCapture: state.pendingResearchCapture,
       pendingFailureLookup: state.pendingFailureLookup,
       sinceCommitCount: state.sinceCommitCount,
       toolExecutionCount: state.toolExecutionCount,
       mcpUsed: state.mcpUsed,
+      checkpointThreshold: law?.gcc?.requireCheckpointEveryTools || 0,
+      lastCompactionAt: state.lastCompactionAt || 0,
+      lastCommitAt: state.lastCommitAt || 0,
+      lastContextRecoveryAt: state.lastContextRecoveryAt || 0,
     },
   };
 }
@@ -1719,12 +1839,14 @@ function buildLawSummaryForInspector(law) {
     gcc: {
       requireInit: law.gcc.requireInit,
       requireCheckpointEveryTools: law.gcc.requireCheckpointEveryTools,
+      checkpointDebtJudgeMode: law.gcc.checkpointDebtJudgeMode,
       requireFailedAttemptLookup: law.gcc.requireFailedAttemptLookup,
       failureLookupPolicyFile: law.gcc.failureLookupPolicyFile,
       failureClassifierEnabled: law.gcc.failureClassifierEnabled,
       failureClassifierMinConfidence: law.gcc.failureClassifierMinConfidence,
       failureClassifierRequireModelDecision: law.gcc.failureClassifierRequireModelDecision,
       compactionCheckpointRequired: law.gcc.compactionCheckpointRequired,
+      compactionDebtJudgeMode: law.gcc.compactionDebtJudgeMode,
       skipCheckpointDuringPlanningAgent: law.gcc.skipCheckpointDuringPlanningAgent,
       countReadOnlyToolsForCheckpoint: law.gcc.countReadOnlyToolsForCheckpoint,
     },
@@ -1764,6 +1886,8 @@ function buildLawSummaryForInspector(law) {
       minConfidence: law.watchman.minConfidence,
       requireModelDecision: law.watchman.requireModelDecision,
       systemPromptFile: law.watchman.systemPromptFile,
+      includeRecentAlerts: law.watchman.includeRecentAlerts,
+      includeRecentActionsAfterAlerts: law.watchman.includeRecentActionsAfterAlerts,
     },
     cliCapabilities: law.cliCapabilities || {},
     runtime: {
@@ -1800,6 +1924,7 @@ function getDebtFlagValue(state, name) {
   if (!key) return false;
   const mapping = {
     pendingCompactionCheckpoint: Boolean(state?.pendingCompactionCheckpoint),
+    pendingCheckpointOverdue: Boolean(state?.pendingCheckpointOverdue),
     pendingResearchCapture: Boolean(state?.pendingResearchCapture),
     pendingFailureLookup: Boolean(state?.pendingFailureLookup),
     hasViolationDebt: Boolean(state?.hasViolationDebt),
@@ -2324,8 +2449,29 @@ function isValidWatchmanParsed(parsed) {
     typeof parsed.violation === "boolean" &&
     typeof parsed.rule === "string" &&
     typeof parsed.reason === "string" &&
-    typeof parsed.correction_prompt === "string"
+    typeof parsed.correction_prompt === "string" &&
+    typeof parsed.confidence === "number"
   );
+}
+
+function normalizeDebtUpdateAction(value) {
+  const action = String(value || "").trim().toLowerCase();
+  if (["open", "clear", "keep"].includes(action)) return action;
+  return "keep";
+}
+
+function extractWatchmanDebtUpdates(parsed) {
+  const raw = parsed?.debt_updates;
+  if (!raw || typeof raw !== "object") {
+    return {
+      pendingCompactionCheckpoint: "keep",
+      pendingCheckpointOverdue: "keep",
+    };
+  }
+  return {
+    pendingCompactionCheckpoint: normalizeDebtUpdateAction(raw.pendingCompactionCheckpoint),
+    pendingCheckpointOverdue: normalizeDebtUpdateAction(raw.pendingCheckpointOverdue),
+  };
 }
 
 function isValidFailureLookupParsed(parsed) {
@@ -2760,6 +2906,8 @@ async function runWatchmanCheck(client, law, payload) {
     const reason = clipText(parsed?.reason || "Policy violation detected by watchman model.", 400);
     const correctionPrompt = clipText(parsed?.correction_prompt || "", 2500);
     const confidence = Number(parsed?.confidence ?? 0);
+    const debtUpdates = extractWatchmanDebtUpdates(parsed);
+    const satisfactionEvidence = clipText(parsed?.satisfaction_evidence || "", 600);
     return {
       available: true,
       violation,
@@ -2768,6 +2916,8 @@ async function runWatchmanCheck(client, law, payload) {
       reason,
       correctionPrompt,
       confidence: Number.isFinite(confidence) ? confidence : 0,
+      debtUpdates,
+      satisfactionEvidence,
       model: result.modelUsed || primaryModel,
       responseFormat: result.responseFormat || "",
       apiKeyEnv: sourceEnv,
@@ -2845,6 +2995,17 @@ async function maybeInterrupt(client, directory, law, state, violation) {
     if (applyDebtDedupe) {
       state.ruleDebtOpen[violation.rule] = true;
     }
+    appendBounded(
+      state.recentInterruptions,
+      {
+        at: new Date(now).toISOString(),
+        rule: violation.rule,
+        detail: violation.detail,
+        source: violation.source || "deterministic",
+        trigger: violation.trigger || "",
+      },
+      40
+    );
     await log(client, "warn", "law.interrupt.injected", {
       sessionId: state.sessionId,
       rule: violation.rule,
@@ -2873,6 +3034,76 @@ function clearRuleDebt(state, ruleName) {
   if (!state?.ruleDebtOpen) return;
   if (!ruleName) return;
   delete state.ruleDebtOpen[ruleName];
+}
+
+function recomputeViolationDebt(state) {
+  if (!state) return;
+  const hasRuleDebt =
+    state.ruleDebtOpen && typeof state.ruleDebtOpen === "object"
+      ? Object.keys(state.ruleDebtOpen).length > 0
+      : false;
+  state.hasViolationDebt = Boolean(
+    hasRuleDebt ||
+      state.pendingCompactionCheckpoint ||
+      state.pendingCheckpointOverdue ||
+      state.pendingResearchCapture ||
+      state.pendingFailureLookup
+  );
+}
+
+function pushDebtTransition(state, payload) {
+  if (!state) return;
+  appendBounded(
+    state.recentDebtTransitions,
+    {
+      at: new Date().toISOString(),
+      ...payload,
+    },
+    30
+  );
+}
+
+function applyWatchmanDebtUpdates(state, debtUpdates, ruleName = "") {
+  if (!state || !debtUpdates) return;
+  const updates = {
+    pendingCompactionCheckpoint: debtUpdates.pendingCompactionCheckpoint || "keep",
+    pendingCheckpointOverdue: debtUpdates.pendingCheckpointOverdue || "keep",
+  };
+
+  for (const [key, action] of Object.entries(updates)) {
+    if (action === "keep") continue;
+    const before = Boolean(state[key]);
+    if (action === "open") {
+      state[key] = true;
+      pushDebtTransition(state, {
+        source: "watchman",
+        debt: key,
+        action: "open",
+        before,
+        after: true,
+        rule: ruleName || "",
+      });
+      continue;
+    }
+    if (action === "clear") {
+      state[key] = false;
+      pushDebtTransition(state, {
+        source: "watchman",
+        debt: key,
+        action: "clear",
+        before,
+        after: false,
+        rule: ruleName || "",
+      });
+      if (key === "pendingCompactionCheckpoint") {
+        clearRuleDebt(state, "compaction_checkpoint_required");
+      }
+      if (key === "pendingCheckpointOverdue") {
+        clearRuleDebt(state, "checkpoint_overdue");
+      }
+    }
+  }
+  recomputeViolationDebt(state);
 }
 
 function shouldHardInterruptCustomRule(law, violationCount, ruleSpecificThreshold = null) {
@@ -2981,6 +3212,20 @@ function buildViolations({
 }) {
   const violations = [];
   const checkpointEvery = law.gcc.requireCheckpointEveryTools;
+  const checkpointJudgeMode = normalizeDebtJudgeMode(
+    law?.gcc?.checkpointDebtJudgeMode,
+    DEFAULT_LAW.gcc.checkpointDebtJudgeMode
+  );
+  const compactionJudgeMode = normalizeDebtJudgeMode(
+    law?.gcc?.compactionDebtJudgeMode,
+    DEFAULT_LAW.gcc.compactionDebtJudgeMode
+  );
+  const checkpointDeterministic =
+    checkpointJudgeMode === "deterministic" ||
+    checkpointJudgeMode === "model_first_fallback";
+  const compactionDeterministic =
+    compactionJudgeMode === "deterministic" ||
+    compactionJudgeMode === "model_first_fallback";
 
   if (law.gcc.requireInit && !hasGCC) {
     violations.push({
@@ -2992,7 +3237,7 @@ function buildViolations({
     return violations;
   }
 
-  if (law.gcc.compactionCheckpointRequired && state.pendingCompactionCheckpoint) {
+  if (law.gcc.compactionCheckpointRequired && compactionDeterministic && state.pendingCompactionCheckpoint) {
     violations.push({
       rule: "compaction_checkpoint_required",
       detail: "Session compaction occurred and checkpoint debt is still open.",
@@ -3005,6 +3250,7 @@ function buildViolations({
   }
 
   if (
+    checkpointDeterministic &&
     trigger !== "tool_call" &&
     state.sinceCommitCount >= checkpointEvery &&
     isGCCInitialized(directory) &&
@@ -3064,6 +3310,55 @@ function buildViolations({
   return violations;
 }
 
+function buildModelDebtCandidates({ law, state, trigger, hasGCC }) {
+  const candidates = [];
+  if (!hasGCC) return candidates;
+
+  const checkpointMode = normalizeDebtJudgeMode(
+    law?.gcc?.checkpointDebtJudgeMode,
+    DEFAULT_LAW.gcc.checkpointDebtJudgeMode
+  );
+  const compactionMode = normalizeDebtJudgeMode(
+    law?.gcc?.compactionDebtJudgeMode,
+    DEFAULT_LAW.gcc.compactionDebtJudgeMode
+  );
+
+  if (checkpointMode === "model_only") {
+    candidates.push({
+      rule: "checkpoint_overdue",
+      detail:
+        "Model should decide whether checkpoint debt is open based on sinceCommitCount, recent commits, and current implementation progress.",
+      commands: ['opencontext commit "Checkpoint after significant progress"'],
+      facts: {
+        sinceCommitCount: Number(state?.sinceCommitCount || 0),
+        checkpointThreshold: Number(law?.gcc?.requireCheckpointEveryTools || 0),
+        trigger,
+      },
+    });
+  }
+
+  if (compactionMode === "model_only" && law?.gcc?.compactionCheckpointRequired) {
+    candidates.push({
+      rule: "compaction_checkpoint_required",
+      detail:
+        "Model should decide compaction recovery debt using recent interruption history and post-alert actions (commit/context recovery already done or not).",
+      commands: [
+        'opencontext commit "Post-compaction checkpoint"',
+        'opencontext context --log --lines 80',
+      ],
+      facts: {
+        pendingCompactionCheckpoint: Boolean(state?.pendingCompactionCheckpoint),
+        lastCompactionAt: Number(state?.lastCompactionAt || 0),
+        lastCommitAt: Number(state?.lastCommitAt || 0),
+        lastContextRecoveryAt: Number(state?.lastContextRecoveryAt || 0),
+        trigger,
+      },
+    });
+  }
+
+  return candidates;
+}
+
 async function evaluateAndEnforce({
   client,
   directory,
@@ -3087,6 +3382,12 @@ async function evaluateAndEnforce({
     toolOutput: toolOutput || "",
     hasGCC,
     planningAgentActive: isPlanningAgentName(state?.lastAgent, law),
+  });
+  const modelDebtCandidates = buildModelDebtCandidates({
+    law,
+    state,
+    trigger,
+    hasGCC,
   });
 
   if (violations.length > 0) {
@@ -3128,10 +3429,14 @@ async function evaluateAndEnforce({
     if (interrupted) return true;
   }
 
-  const hardInvariantRules = new Set([
-    "gcc_init_required",
-    "compaction_checkpoint_required",
-  ]);
+  const compactionJudgeMode = normalizeDebtJudgeMode(
+    law?.gcc?.compactionDebtJudgeMode,
+    DEFAULT_LAW.gcc.compactionDebtJudgeMode
+  );
+  const hardInvariantRules = new Set(["gcc_init_required"]);
+  if (compactionJudgeMode !== "model_only") {
+    hardInvariantRules.add("compaction_checkpoint_required");
+  }
   const pickFallbackViolation = (allowPolicyFallback) =>
     violations.find((item) => hardInvariantRules.has(item.rule)) ||
     (allowPolicyFallback ? violations[0] : null);
@@ -3161,14 +3466,17 @@ async function evaluateAndEnforce({
   state.inspectorInFlight = true;
   try {
     const evidence = await collectWatchmanEvidence(client, law, state, directory);
-    const latestAssistant = evidence.latestAssistant;
-    if (!latestAssistant) {
-      const fallbackViolation = pickFallbackViolation(!law?.watchman?.requireModelDecision);
-      if (fallbackViolation) {
-        return await maybeInterrupt(client, directory, law, state, fallbackViolation);
-      }
-      return false;
-    }
+    const latestAssistant =
+      evidence.latestAssistant || {
+        id: state.lastAssistantMessageId || "",
+        role: "assistant",
+        agent: state.lastAgent || "",
+        modelID: state?.lastModel?.modelID || "",
+        finish: "",
+        text: clipText(state.lastAssistantText || "", 2000),
+        partTypes: [],
+        time: {},
+      };
 
     if (assistantMessageId && latestAssistant.id && assistantMessageId !== latestAssistant.id) {
       return false;
@@ -3195,10 +3503,11 @@ async function evaluateAndEnforce({
       gccHistory: evidence.gccHistory,
       debts: evidence.debts,
       customRuleCounters: state.customRuleViolations,
-      deterministicCandidates: violations.map((violation) => ({
+      deterministicCandidates: [...violations, ...modelDebtCandidates].map((violation) => ({
         rule: violation.rule,
         detail: violation.detail,
         commands: violation.commands || [],
+        facts: violation.facts || {},
       })),
     };
     await appendLawTrace(client, directory, law, {
@@ -3211,6 +3520,9 @@ async function evaluateAndEnforce({
         latestAssistant,
         recentMessages: evidence.recentMessages,
         recentToolCalls: evidence.recentToolCalls,
+        recentInterruptions: evidence.recentInterruptions,
+        postAlertActions: evidence.postAlertActions,
+        recentDebtTransitions: evidence.recentDebtTransitions,
         gccHistory: {
           currentBranch: evidence?.gccHistory?.currentBranch || "",
           semanticMatches: (evidence?.gccHistory?.semanticMatches || []).slice(0, 3),
@@ -3247,7 +3559,11 @@ async function evaluateAndEnforce({
       error: verdict.error || "",
       raw: verdict.raw || "",
       attempts: verdict.attempts || 1,
+      debtUpdates: verdict.debtUpdates || {},
+      satisfactionEvidence: verdict.satisfactionEvidence || "",
     });
+
+    applyWatchmanDebtUpdates(state, verdict?.debtUpdates, verdict?.rule || "");
 
     const minConfidence = Number(law?.watchman?.minConfidence ?? 0.65);
     const confidence = Number(verdict?.confidence ?? 0);
@@ -3257,17 +3573,18 @@ async function evaluateAndEnforce({
       Number.isFinite(confidence) &&
       confidence >= minConfidence;
 
-    if (!modelViolation) {
-      if (latestAssistant.id) {
-        state.lastInspectedAssistantMessageId = latestAssistant.id;
-      }
-      if (verdict.available && !verdict.violation) {
+      if (!modelViolation) {
+        if (latestAssistant.id) {
+          state.lastInspectedAssistantMessageId = latestAssistant.id;
+        }
+        if (verdict.available && !verdict.violation) {
         clearRuleDebt(state, "watchman_policy_violation");
         for (const key of Object.keys(state.ruleDebtOpen || {})) {
           if (String(key).startsWith("watchman_")) {
             clearRuleDebt(state, key);
           }
         }
+        recomputeViolationDebt(state);
       }
       if (verdict.available && verdict.violation && confidence < minConfidence) {
         await log(client, "info", "law.watchman.low_confidence_skip", {
@@ -3393,8 +3710,26 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       if (event.type === "session.compacted") {
         await log(client, "debug", "event session.compacted");
         if (state) {
-          state.pendingCompactionCheckpoint = true;
-          state.hasViolationDebt = true;
+          state.lastCompactionAt = Date.now();
+          const compactionMode = normalizeDebtJudgeMode(
+            law?.gcc?.compactionDebtJudgeMode,
+            DEFAULT_LAW.gcc.compactionDebtJudgeMode
+          );
+          if (
+            law?.gcc?.compactionCheckpointRequired &&
+            (compactionMode === "deterministic" || compactionMode === "model_first_fallback")
+          ) {
+            state.pendingCompactionCheckpoint = true;
+            state.hasViolationDebt = true;
+            pushDebtTransition(state, {
+              source: "compaction_event",
+              debt: "pendingCompactionCheckpoint",
+              action: "open",
+              before: false,
+              after: true,
+              rule: "compaction_checkpoint_required",
+            });
+          }
         }
         if (!isGCCInitialized(directory)) {
           await toast(client, {
@@ -3405,12 +3740,25 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           });
           return;
         }
-        await toast(client, {
-          message:
-            "⚠️ Context compacted.\nCheckpoint now: opencontext commit \"<summary>\"\nThen recover details with: opencontext context --log --lines 80",
-          type: "warning",
-          timeout: 10000,
-        });
+        const compactionMode = normalizeDebtJudgeMode(
+          law?.gcc?.compactionDebtJudgeMode,
+          DEFAULT_LAW.gcc.compactionDebtJudgeMode
+        );
+        if (compactionMode === "model_only") {
+          await toast(client, {
+            message:
+              "⚠️ Context compacted.\nLaw Enforcer is evaluating recovery needs from recent actions/history.",
+            type: "info",
+            timeout: 9000,
+          });
+        } else {
+          await toast(client, {
+            message:
+              "⚠️ Context compacted.\nCheckpoint now: opencontext commit \"<summary>\"\nThen recover details with: opencontext context --log --lines 80",
+            type: "warning",
+            timeout: 10000,
+          });
+        }
 
         if (state) {
           await evaluateAndEnforce({
@@ -3509,9 +3857,15 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       const law = await loadLaw(client, directory);
       await log(client, "debug", "hook experimental.session.compacting");
       const hasGCC = isGCCInitialized(directory);
+      const compactionMode = normalizeDebtJudgeMode(
+        law?.gcc?.compactionDebtJudgeMode,
+        DEFAULT_LAW.gcc.compactionDebtJudgeMode
+      );
 
       const reminder = hasGCC
-        ? `OpenContext Law Enforcer: context is being compacted. Required: \`opencontext commit "<summary>"\`, then \`opencontext context --log --lines 80\`. Mode=${law.mode}.`
+        ? compactionMode === "model_only"
+          ? `OpenContext Law Enforcer: context is being compacted. Recovery obligations will be judged from recent actions/history. Preserve progress and follow any recovery prompt if issued. Mode=${law.mode}.`
+          : `OpenContext Law Enforcer: context is being compacted. Required: \`opencontext commit "<summary>"\`, then \`opencontext context --log --lines 80\`. Mode=${law.mode}.`
         : 'OpenContext Law Enforcer: GCC is not initialized. Run `opencontext init --project-name "<name>" --goal "<goal>"` before continuing long tasks.';
       output.context = Array.isArray(output.context) ? output.context : [];
       output.context.push(reminder);
@@ -3568,7 +3922,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
 - Current Branch: ${branch}
 - Last Commit: ${lastCommit}
 - Checkpoint cadence: every ${law.gcc.requireCheckpointEveryTools} significant tool calls.
-- Compaction requires immediate checkpoint + context recovery.
+- Checkpoint/compaction debt may be model-judged from recent actions and history evidence.
 - Record research findings and failed attempts as first-class context artifacts.`
           );
           await log(client, "debug", "system prompt augmented", { branch });
@@ -3626,6 +3980,21 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         state.sinceCommitCount += 1;
       }
 
+      const checkpointMode = normalizeDebtJudgeMode(
+        law?.gcc?.checkpointDebtJudgeMode,
+        DEFAULT_LAW.gcc.checkpointDebtJudgeMode
+      );
+      const checkpointDeterministic =
+        checkpointMode === "deterministic" ||
+        checkpointMode === "model_first_fallback";
+      const compactionMode = normalizeDebtJudgeMode(
+        law?.gcc?.compactionDebtJudgeMode,
+        DEFAULT_LAW.gcc.compactionDebtJudgeMode
+      );
+      const compactionDeterministic =
+        compactionMode === "deterministic" ||
+        compactionMode === "model_first_fallback";
+
       await log(client, "debug", "hook tool.execute.after", {
         tool,
         toolExecutionCount: state.toolExecutionCount,
@@ -3639,10 +4008,44 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       }
 
       if (isOpenContextCommitCommand(commandText)) {
+        state.lastCommitAt = Date.now();
         state.sinceCommitCount = 0;
+        const hadCompactionDebt = Boolean(state.pendingCompactionCheckpoint);
         state.pendingCompactionCheckpoint = false;
+        if (hadCompactionDebt) {
+          pushDebtTransition(state, {
+            source: "action_signal",
+            debt: "pendingCompactionCheckpoint",
+            action: "clear",
+            before: true,
+            after: false,
+            rule: "compaction_checkpoint_required",
+          });
+        }
+        const hadCheckpointDebt = Boolean(state.pendingCheckpointOverdue);
+        state.pendingCheckpointOverdue = false;
+        if (hadCheckpointDebt) {
+          pushDebtTransition(state, {
+            source: "action_signal",
+            debt: "pendingCheckpointOverdue",
+            action: "clear",
+            before: true,
+            after: false,
+            rule: "checkpoint_overdue",
+          });
+        }
+        const hadResearchDebt = Boolean(state.pendingResearchCapture);
         state.pendingResearchCapture = false;
-        state.hasViolationDebt = false;
+        if (hadResearchDebt) {
+          pushDebtTransition(state, {
+            source: "action_signal",
+            debt: "pendingResearchCapture",
+            action: "clear",
+            before: true,
+            after: false,
+            rule: "research_capture_required",
+          });
+        }
         state.consecutiveInjections = 0;
         if (law?.custom?.escalation?.resetOnCommit !== false) {
           state.customRuleViolations = {};
@@ -3652,15 +4055,76 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         clearRuleDebt(state, "compaction_checkpoint_required");
         clearRuleDebt(state, "research_capture_required");
         clearRuleDebt(state, "failed_attempt_lookup_required");
+        recomputeViolationDebt(state);
       }
       if (isOpenContextContextLookup(commandText)) {
+        state.lastContextRecoveryAt = Date.now();
+        const hadFailureLookupDebt = Boolean(state.pendingFailureLookup);
         state.pendingFailureLookup = false;
+        if (hadFailureLookupDebt) {
+          pushDebtTransition(state, {
+            source: "action_signal",
+            debt: "pendingFailureLookup",
+            action: "clear",
+            before: true,
+            after: false,
+            rule: "failed_attempt_lookup_required",
+          });
+        }
         clearRuleDebt(state, "failed_attempt_lookup_required");
+        recomputeViolationDebt(state);
       }
       if (isOpenContextInitCommand(commandText) && isGCCInitialized(directory)) {
-        state.hasViolationDebt = false;
         clearRuleDebt(state, "gcc_init_required");
+        recomputeViolationDebt(state);
       }
+
+      if (compactionDeterministic && law?.gcc?.compactionCheckpointRequired) {
+        const compactionAt = Number(state.lastCompactionAt || 0);
+        const commitRecovered = Number(state.lastCommitAt || 0) >= compactionAt && compactionAt > 0;
+        const contextRecovered =
+          Number(state.lastContextRecoveryAt || 0) >= compactionAt && compactionAt > 0;
+        if (state.pendingCompactionCheckpoint && commitRecovered && contextRecovered) {
+          state.pendingCompactionCheckpoint = false;
+          clearRuleDebt(state, "compaction_checkpoint_required");
+          pushDebtTransition(state, {
+            source: "action_signal",
+            debt: "pendingCompactionCheckpoint",
+            action: "clear",
+            before: true,
+            after: false,
+            rule: "compaction_checkpoint_required",
+          });
+        }
+      }
+
+      if (checkpointDeterministic) {
+        const shouldOpenCheckpointDebt =
+          state.sinceCommitCount >= law.gcc.requireCheckpointEveryTools;
+        if (shouldOpenCheckpointDebt && !state.pendingCheckpointOverdue) {
+          state.pendingCheckpointOverdue = true;
+          pushDebtTransition(state, {
+            source: "threshold",
+            debt: "pendingCheckpointOverdue",
+            action: "open",
+            before: false,
+            after: true,
+            rule: "checkpoint_overdue",
+          });
+        } else if (!shouldOpenCheckpointDebt && state.pendingCheckpointOverdue) {
+          state.pendingCheckpointOverdue = false;
+          clearRuleDebt(state, "checkpoint_overdue");
+          pushDebtTransition(state, {
+            source: "threshold",
+            debt: "pendingCheckpointOverdue",
+            action: "clear",
+            before: true,
+            after: false,
+            rule: "checkpoint_overdue",
+          });
+        }
+      }
+      recomputeViolationDebt(state);
 
       const historyQuery = buildHistoryQueryFromState(state, [
         commandText,
@@ -3731,8 +4195,19 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           },
         });
         if (requireCapture) {
+          const before = Boolean(state.pendingResearchCapture);
           state.pendingResearchCapture = true;
-          state.hasViolationDebt = true;
+          if (!before) {
+            pushDebtTransition(state, {
+              source: "research_classifier",
+              debt: "pendingResearchCapture",
+              action: "open",
+              before: false,
+              after: true,
+              rule: "research_capture_required",
+            });
+          }
+          recomputeViolationDebt(state);
           const now = Date.now();
           if (now - state.lastResearchReminderTime >= CONFIG.researchReminderCooldownMs) {
             state.lastResearchReminderTime = now;
@@ -3806,8 +4281,19 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           },
         });
         if (requireLookup) {
+          const before = Boolean(state.pendingFailureLookup);
           state.pendingFailureLookup = true;
-          state.hasViolationDebt = true;
+          if (!before) {
+            pushDebtTransition(state, {
+              source: "failure_classifier",
+              debt: "pendingFailureLookup",
+              action: "open",
+              before: false,
+              after: true,
+              rule: "failed_attempt_lookup_required",
+            });
+          }
+          recomputeViolationDebt(state);
         }
       }
 

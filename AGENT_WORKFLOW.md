@@ -115,6 +115,8 @@ Edit `.GCC/law-research-policy.txt` to customize what research must be checkpoin
 If you want model-only judgment (no fallback decisions), set in `.GCC/law-enforcer.json`:
 - `gcc.failureClassifierRequireModelDecision: true`
 - `research.captureClassifierRequireModelDecision: true`
+- `gcc.checkpointDebtJudgeMode: "model_only"`
+- `gcc.compactionDebtJudgeMode: "model_only"`
 - `watchman.requireModelDecision: true`
 Edit `.GCC/law-runtime.json` for project-local API key/model overrides.
 Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.

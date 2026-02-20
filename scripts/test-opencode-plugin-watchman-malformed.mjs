@@ -111,7 +111,9 @@ const client = {
 
 const oldFetch = global.fetch;
 const oldApiKey = process.env.CHUTES_API_KEY;
+const oldHome = process.env.HOME;
 process.env.CHUTES_API_KEY = "test-key";
+process.env.HOME = tempDir;
 let fetchCalls = 0;
 const requestBodies = [];
 global.fetch = async (_url, options = {}) => {
@@ -193,5 +195,7 @@ try {
   global.fetch = oldFetch;
   if (oldApiKey == null) delete process.env.CHUTES_API_KEY;
   else process.env.CHUTES_API_KEY = oldApiKey;
+  if (oldHome == null) delete process.env.HOME;
+  else process.env.HOME = oldHome;
   rmSync(tempDir, { recursive: true, force: true });
 }

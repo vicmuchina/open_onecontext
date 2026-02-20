@@ -25,6 +25,7 @@ writeFileSync(
     gcc: {
       requireInit: true,
       requireCheckpointEveryTools: 2,
+      checkpointDebtJudgeMode: "deterministic",
       requireFailedAttemptLookup: true,
       compactionCheckpointRequired: true,
     },

@@ -453,11 +453,13 @@ def _default_watchman_system_prompt_text() -> str:
     return dedent(
         """\
         You are the OpenContext Law Enforcer Watchman.
-        Judge only workflow-law compliance using the provided law summary, policy text, agent guide, recent messages, and tool evidence.
+        Judge workflow-law compliance using the provided law summary, policy text, agent guide, recent messages, tool evidence, interruption history, action history, and debt flags.
         Return STRICT JSON only matching the required schema exactly.
+        You may return debt_updates to open/clear/keep checkpoint and compaction debt.
 
         Core behavior
         - Do not repeat the exact same interruption for an unresolved violation unless there is new evidence.
+        - Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied before alerting again.
         - Prioritize actionable implementation workflow violations.
         - Treat setup/environment/CLI-usage noise as non-actionable unless policy explicitly marks it actionable.
         - Interrupt only when there is a clear immediate corrective action the agent can perform.
@@ -940,6 +942,14 @@ def _validate_law_content(law: Dict) -> List[str]:
             value = gcc.get("requireCheckpointEveryTools")
             if not isinstance(value, (int, float)) or value < 1:
                 errors.append("gcc.requireCheckpointEveryTools must be a positive number.")
+        if "checkpointDebtJudgeMode" in gcc:
+            value = gcc.get("checkpointDebtJudgeMode")
+            allowed = {"model_only", "model_first_fallback", "deterministic"}
+            if not isinstance(value, str) or value not in allowed:
+                errors.append(
+                    "gcc.checkpointDebtJudgeMode must be one of: "
+                    "model_only, model_first_fallback, deterministic."
+                )
         if "failureLookupPolicyFile" in gcc and not isinstance(gcc.get("failureLookupPolicyFile"), str):
             errors.append("gcc.failureLookupPolicyFile must be a string.")
         if "failureClassifierEnabled" in gcc and not isinstance(gcc.get("failureClassifierEnabled"), bool):
@@ -952,6 +962,14 @@ def _validate_law_content(law: Dict) -> List[str]:
             value = gcc.get("failureClassifierMinConfidence")
             if not isinstance(value, (int, float)) or value < 0 or value > 1:
                 errors.append("gcc.failureClassifierMinConfidence must be a number between 0 and 1.")
+        if "compactionDebtJudgeMode" in gcc:
+            value = gcc.get("compactionDebtJudgeMode")
+            allowed = {"model_only", "model_first_fallback", "deterministic"}
+            if not isinstance(value, str) or value not in allowed:
+                errors.append(
+                    "gcc.compactionDebtJudgeMode must be one of: "
+                    "model_only, model_first_fallback, deterministic."
+                )
     else:
         errors.append("gcc must be a mapping/object.")
 
@@ -1027,6 +1045,14 @@ def _validate_law_content(law: Dict) -> List[str]:
             watchman.get("requireModelDecision"), bool
         ):
             errors.append("watchman.requireModelDecision must be true or false.")
+        if "includeRecentAlerts" in watchman:
+            value = watchman.get("includeRecentAlerts")
+            if not isinstance(value, (int, float)) or value < 1:
+                errors.append("watchman.includeRecentAlerts must be a positive number.")
+        if "includeRecentActionsAfterAlerts" in watchman:
+            value = watchman.get("includeRecentActionsAfterAlerts")
+            if not isinstance(value, (int, float)) or value < 1:
+                errors.append("watchman.includeRecentActionsAfterAlerts must be a positive number.")
     else:
         errors.append("watchman must be a mapping/object.")
 
@@ -1282,6 +1308,7 @@ def law_status(law_path_opt: Optional[Path]):
 
     mode = law_data.get("mode", "unknown")
     checkpoint = law_data.get("gcc", {}).get("requireCheckpointEveryTools", "unknown")
+    checkpoint_mode = law_data.get("gcc", {}).get("checkpointDebtJudgeMode", "unknown")
     planning_skip = law_data.get("gcc", {}).get("skipCheckpointDuringPlanningAgent", "unknown")
     failure_policy_file = law_data.get("gcc", {}).get("failureLookupPolicyFile", LAW_FAILURE_POLICY_FILENAME)
     failure_classifier_enabled = law_data.get("gcc", {}).get("failureClassifierEnabled", "unknown")
@@ -1300,6 +1327,9 @@ def law_status(law_path_opt: Optional[Path]):
     watchman_min_conf = law_data.get("watchman", {}).get("minConfidence", "unknown")
     watchman_model_only = law_data.get("watchman", {}).get("requireModelDecision", "unknown")
     watchman_prompt_file = law_data.get("watchman", {}).get("systemPromptFile", LAW_WATCHMAN_PROMPT_FILENAME)
+    watchman_alerts = law_data.get("watchman", {}).get("includeRecentAlerts", "unknown")
+    watchman_post_alert_actions = law_data.get("watchman", {}).get("includeRecentActionsAfterAlerts", "unknown")
+    compaction_mode = law_data.get("gcc", {}).get("compactionDebtJudgeMode", "unknown")
     research_policy_file = law_data.get("research", {}).get("capturePolicyFile", LAW_RESEARCH_POLICY_FILENAME)
     research_classifier_enabled = law_data.get("research", {}).get("captureClassifierEnabled", "unknown")
     research_classifier_conf = law_data.get("research", {}).get("captureClassifierMinConfidence", "unknown")
@@ -1319,7 +1349,9 @@ def law_status(law_path_opt: Optional[Path]):
         f"Path: {law_path}\n"
         f"Mode: {mode}\n"
         f"Checkpoint cadence: {checkpoint}\n"
+        f"Checkpoint debt mode: {checkpoint_mode}\n"
         f"Skip checkpoint during planning: {planning_skip}\n"
+        f"Compaction debt mode: {compaction_mode}\n"
         f"Failure classifier enabled: {failure_classifier_enabled}\n"
         f"Failure classifier min confidence: {failure_classifier_conf}\n"
         f"Failure classifier require model decision: {failure_classifier_model_only}\n"
@@ -1334,6 +1366,8 @@ def law_status(law_path_opt: Optional[Path]):
         f"Watchman dedupe unresolved violations: {watchman_dedupe}\n"
         f"Watchman min confidence: {watchman_min_conf}\n"
         f"Watchman require model decision: {watchman_model_only}\n"
+        f"Watchman recent alerts window: {watchman_alerts}\n"
+        f"Watchman post-alert action window: {watchman_post_alert_actions}\n"
         f"Research classifier enabled: {research_classifier_enabled}\n"
         f"Research classifier min confidence: {research_classifier_conf}\n"
         f"Research classifier require model decision: {research_classifier_model_only}\n"

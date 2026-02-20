@@ -22,13 +22,13 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 
 3. `tool.execute.after`
 - Records tool and output in recent evidence.
-- Updates checkpoint/failure/research debt.
+- Updates checkpoint/failure/research debt plus debt-transition history.
 - Failure debt is model-judged first (failure policy).
 - Research debt is model-judged first (research policy).
 - Runs deterministic violation checks.
 - Evaluates user-defined `custom.rules` against tool/command/output context.
 - Applies per-rule escalation (soft reminder first, then hard interruption).
-- Runs watchman check by default (`watchman.inspectToolCalls=true`), configurable.
+- Watchman on tool calls is optional (`watchman.inspectToolCalls=false` by default), configurable.
 
 4. `message.updated` (assistant completion)
 - Captures assistant identity/model.
@@ -39,14 +39,17 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 - Can run watchman pass (configurable).
 
 6. `session.compacted`
-- Marks compaction debt.
-- Enforces immediate checkpoint + context recovery path.
+- Records compaction timestamp and recovery context.
+- In deterministic compaction mode, opens compaction debt immediately.
+- In model-driven compaction mode, watchman decides debt open/clear using interruption history and post-alert actions.
 
 ## Evidence Sent to Watchman
 - Trigger type
 - Latest assistant message summary
 - Recent transcript window
 - Recent tool-call records
+- Recent interruption records + post-alert actions
+- Recent debt transitions
 - Debt state (checkpoint/research/failure/mcp indicators)
 - Custom rule counters
 - GCC history evidence (main/commit/log/metadata tails + semantic similar-attempt matches)
@@ -60,6 +63,9 @@ Watchman must return:
 - `reason` (string)
 - `correction_prompt` (string)
 - `confidence` (number)
+- Optional:
+  - `satisfaction_evidence` (string)
+  - `debt_updates` object with `pendingCheckpointOverdue` and `pendingCompactionCheckpoint` (`open|clear|keep`)
 
 Critic must return:
 - `enforce` (boolean)
