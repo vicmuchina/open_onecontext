@@ -38,7 +38,7 @@ writeFileSync(
       provider: "openai_compatible",
       baseUrl: "https://llm.chutes.ai/v1",
       endpointPath: "/chat/completions",
-      model: "openai/gpt-oss-120b-TEE",
+      model: "zai-org/GLM-4.7-Flash",
       apiKeyEnv: "CHUTES_API_KEY",
       timeoutMs: 3000,
     },
@@ -64,7 +64,7 @@ writeFileSync(
   JSON.stringify({
     critic: {
       apiKey: "runtime-config-key",
-      model: "openai/gpt-oss-120b-TEE",
+      model: "zai-org/GLM-4.7-Flash",
     },
   }),
   "utf-8"
@@ -175,7 +175,7 @@ try {
     console.error("FAIL  runtime config API key was not used");
     process.exit(1);
   }
-  if (body.model !== "openai/gpt-oss-120b-TEE") {
+  if (body.model !== "zai-org/GLM-4.7-Flash") {
     console.error("FAIL  runtime config model override was not used");
     process.exit(1);
   }

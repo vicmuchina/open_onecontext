@@ -40,7 +40,7 @@ writeFileSync(
     },
     critic: {
       enabled: false,
-      model: "openai/gpt-oss-120b-TEE",
+      model: "zai-org/GLM-4.7-Flash",
     },
     watchman: {
       enabled: false,

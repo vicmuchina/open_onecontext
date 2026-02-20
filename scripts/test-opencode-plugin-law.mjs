@@ -41,7 +41,7 @@ writeFileSync(
       enabled: false,
       provider: "chutes",
       baseUrl: "https://llm.chutes.ai/v1",
-      model: "openai/gpt-oss-120b-TEE",
+      model: "zai-org/GLM-4.7-Flash",
       apiKeyEnv: "CHUTES_API_KEY",
       timeoutMs: 3500,
     },

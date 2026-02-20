@@ -74,7 +74,7 @@ const DEFAULT_LAW = {
     apiKeyPrefix: "Bearer",
     headers: {},
     request: {},
-    model: "openai/gpt-oss-120b-TEE",
+    model: "zai-org/GLM-4.7-Flash",
     apiKeyEnv: "CHUTES_API_KEY",
     modelEnv: "OPENCONTEXT_LAW_MODEL_ID",
     timeoutMs: 8000,

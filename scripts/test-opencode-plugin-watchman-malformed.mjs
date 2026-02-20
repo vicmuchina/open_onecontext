@@ -41,7 +41,7 @@ writeFileSync(
       endpointPath: "/chat/completions",
       authHeader: "authorization",
       apiKeyPrefix: "Bearer",
-      model: "openai/gpt-oss-120b-TEE",
+      model: "zai-org/GLM-4.7-Flash",
       apiKeyEnv: "CHUTES_API_KEY",
       timeoutMs: 3000,
       maxTokensWatchman: 200,

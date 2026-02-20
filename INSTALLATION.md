@@ -155,8 +155,8 @@ Configure watchman API key for model-based law inspection:
 
 ```bash
 export CHUTES_API_KEY="<your_api_key>"
-# Optional model override (default is openai/gpt-oss-120b-TEE)
-export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
+# Optional model override (default is zai-org/GLM-4.7-Flash)
+export OPENCONTEXT_LAW_MODEL_ID="zai-org/GLM-4.7-Flash"
 ```
 
 Set once using config files (no repeated `export`):

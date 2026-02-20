@@ -151,7 +151,7 @@ Default:
 - Provider style: OpenAI-compatible
 - Endpoint: `https://llm.chutes.ai/v1`
 - Path: `/chat/completions`
-- Model: `openai/gpt-oss-120b-TEE`
+- Model: `zai-org/GLM-4.7-Flash`
 - API key env (default): `CHUTES_API_KEY` (fallback: `OPENCONTEXT_LAW_API_KEY`)
 - Optional model override env: `OPENCONTEXT_LAW_MODEL_ID`
 

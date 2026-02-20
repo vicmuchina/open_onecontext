@@ -307,7 +307,7 @@ Configure critic/watchman provider (OpenAI-compatible):
 ```bash
 export CHUTES_API_KEY="<your_api_key>"
 # Optional model override without editing law file
-export OPENCONTEXT_LAW_MODEL_ID="openai/gpt-oss-120b-TEE"
+export OPENCONTEXT_LAW_MODEL_ID="zai-org/GLM-4.7-Flash"
 ```
 
 No-repeat key setup:
@@ -780,7 +780,7 @@ Example `law-runtime.json`:
 {
   "critic": {
     "apiKey": "cpk_...",
-    "model": "openai/gpt-oss-120b-TEE",
+    "model": "zai-org/GLM-4.7-Flash",
     "baseUrl": "https://llm.chutes.ai/v1",
     "endpointPath": "/chat/completions"
   }
@@ -817,7 +817,7 @@ Example `law-runtime.json`:
     "apiKeyPrefix": "Bearer",
     "headers": {},
     "request": {},
-    "model": "openai/gpt-oss-120b-TEE",
+    "model": "zai-org/GLM-4.7-Flash",
     "apiKeyEnv": "CHUTES_API_KEY",
     "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
     "strictJsonRetryAttempts": 2
