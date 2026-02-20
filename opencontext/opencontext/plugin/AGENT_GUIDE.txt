@@ -14,6 +14,11 @@ Fast path:
 - opencontext law status
 - opencontext law doctor
 
+Enforcement style:
+- Watchman/critic judgment is primary for interruptions.
+- Do not rely on fixed idle/action-count/context-usage checkpoint reminders.
+- Follow explicit watchman correction prompts and current debt flags.
+
 When provider/model is missing, ask the user:
 - provider type/base URL
 - API key env var name

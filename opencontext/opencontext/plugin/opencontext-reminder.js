@@ -3740,25 +3740,12 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           });
           return;
         }
-        const compactionMode = normalizeDebtJudgeMode(
-          law?.gcc?.compactionDebtJudgeMode,
-          DEFAULT_LAW.gcc.compactionDebtJudgeMode
-        );
-        if (compactionMode === "model_only") {
-          await toast(client, {
-            message:
-              "⚠️ Context compacted.\nLaw Enforcer is evaluating recovery needs from recent actions/history.",
-            type: "info",
-            timeout: 9000,
-          });
-        } else {
-          await toast(client, {
-            message:
-              "⚠️ Context compacted.\nCheckpoint now: opencontext commit \"<summary>\"\nThen recover details with: opencontext context --log --lines 80",
-            type: "warning",
-            timeout: 10000,
-          });
-        }
+        await toast(client, {
+          message:
+            "⚠️ Context compacted.\nLaw Enforcer is evaluating recovery needs from recent actions/history.",
+          type: "info",
+          timeout: 9000,
+        });
 
         if (state) {
           await evaluateAndEnforce({
@@ -3804,11 +3791,6 @@ export const OpenContextPlugin = async ({ client, directory }) => {
               contextPercent,
               messageUpdateCount,
             });
-            await toast(client, {
-              message: `📊 Context usage: ${contextPercent}%\nConsider: opencontext commit "<summary>"`,
-              type: "info",
-              timeout: 8000,
-            });
           }
         }
 
@@ -3831,7 +3813,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       if (event.type === "session.idle" && state) {
         await log(client, "debug", "event session.idle", { toolExecutionCount: state.toolExecutionCount });
         const hasGCC = isGCCInitialized(directory);
-        const interrupted = await evaluateAndEnforce({
+        await evaluateAndEnforce({
           client,
           directory,
           law,
@@ -3843,13 +3825,6 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           hasGCC,
         });
 
-        if (!interrupted && hasGCC && state.toolExecutionCount > 2) {
-          await toast(client, {
-            message: `⏸️ Session idle after ${state.toolExecutionCount} actions.\nConsider: opencontext commit "Session checkpoint"`,
-            type: "info",
-            timeout: 8000,
-          });
-        }
       }
     },
 
@@ -3857,15 +3832,9 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       const law = await loadLaw(client, directory);
       await log(client, "debug", "hook experimental.session.compacting");
       const hasGCC = isGCCInitialized(directory);
-      const compactionMode = normalizeDebtJudgeMode(
-        law?.gcc?.compactionDebtJudgeMode,
-        DEFAULT_LAW.gcc.compactionDebtJudgeMode
-      );
 
       const reminder = hasGCC
-        ? compactionMode === "model_only"
-          ? `OpenContext Law Enforcer: context is being compacted. Recovery obligations will be judged from recent actions/history. Preserve progress and follow any recovery prompt if issued. Mode=${law.mode}.`
-          : `OpenContext Law Enforcer: context is being compacted. Required: \`opencontext commit "<summary>"\`, then \`opencontext context --log --lines 80\`. Mode=${law.mode}.`
+        ? `OpenContext Law Enforcer: context is being compacted. Recovery obligations are judged from recent actions/history. Follow watchman correction prompts when issued. Mode=${law.mode}.`
         : 'OpenContext Law Enforcer: GCC is not initialized. Run `opencontext init --project-name "<name>" --goal "<goal>"` before continuing long tasks.';
       output.context = Array.isArray(output.context) ? output.context : [];
       output.context.push(reminder);
@@ -4309,15 +4278,6 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         hasGCC,
       });
 
-      if (!interrupted && state.toolExecutionCount % law.gcc.requireCheckpointEveryTools === 0) {
-        if (hasGCC) {
-          await toast(client, {
-            message: `🎯 ${state.toolExecutionCount} actions completed.\nCheckpoint now:\nopencontext commit "Checkpoint progress"`,
-            type: "info",
-            timeout: 8000,
-          });
-        }
-      }
     },
   };
 };

@@ -109,6 +109,20 @@ In `.GCC/`:
   - `watchman.inspectOnIdle=false`
   - higher confidence gate (`watchman.minConfidence=0.75`)
 
+### Continuation Checkpoint (2026-02-20, No-Mechanistic Reminder Pass)
+
+- Operator objective locked: remove mechanistic checkpoint nudges (idle/action-count/context-usage) and rely on watchman judgment + debt state instead of fixed reminder cadence.
+- Runtime rule: passive UI toasts must be informational only; they must not force checkpoint commands outside watchman/model judgment.
+- Documentation sync required in this pass:
+  - `SPEC.md`
+  - `IMPLEMENTATION.md`
+  - `opencontext/README.md`
+  - generated agent guide template (`opencontext/opencontext/plugin/AGENT_GUIDE.txt`)
+- Enforcement source of truth remains:
+  - model-judged watchman verdicts
+  - structured debt flags/transitions
+  - configurable deterministic modes only when explicitly selected by policy owners
+
 ---
 
 ## Architecture
@@ -677,8 +691,6 @@ opencontext init --project-name "MyApp" --goal "Build a web scraper"
 
 # After implementing core feature
 opencontext commit -m "Implemented basic scraping logic"
-
-# Plugin shows: "🎯 5 actions completed. Suggestion: opencontext commit -m '...'"
 
 # Try alternative approach
 opencontext branch experiment-async-scraper

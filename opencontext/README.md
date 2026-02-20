@@ -705,10 +705,11 @@ Approaches: 2 (1 abandoned)
 📊 Run 'opencontext tui' for visual dashboard
 ```
 
-### 5. Idle Session Reminder
+### 5. Idle Safety Inspection
 ```
-⏸️ Session idle with unresolved law debt.
-Law Enforcer re-injects required corrective actions.
+⏸️ Session idle.
+If `watchman.inspectOnIdle=true`, Law Enforcer runs an extra watchman pass.
+No fixed checkpoint toast is emitted on idle.
 ```
 
 ### Research + MCP Discipline
@@ -724,13 +725,14 @@ The OpenCode plugin hooks into OpenCode's event system:
    - Detects `.GCC/` directory
    - Runs `opencontext context` to get current status
    - Injects context into the system prompt
-   - Shows notification toast
+   - Shows initialization status toast
 
 2. **Context Compacted** (`session.compacted`)
    - Triggered when OpenCode truncates context
    - Records compaction timestamp and recovery context
    - In deterministic mode: opens compaction debt immediately
    - In model modes: watchman judges whether compaction debt should open/clear based on post-alert actions
+   - Compaction notice is informational; corrective commands come from watchman/deterministic debt flow, not fixed reminder cadence
 
 3. **Tool Execution** (`tool.execute.after`)
    - Tracks every tool execution

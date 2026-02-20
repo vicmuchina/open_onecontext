@@ -103,6 +103,22 @@ Deterministic debt triggers based on simple patterns are brittle in dynamic Open
   - deterministic checkpoint debt state transitions when deterministic modes are selected
   - debt transition recording on classifier open/clear actions
 
+### Continuation Checkpoint (2026-02-20, No-Mechanistic Reminder Pass)
+
+- New requirement accepted: remove mechanistic checkpoint nudges that fire by fixed counters or idle time and instead depend on watchman judgment.
+- Implementation direction locked for this pass:
+  - Remove passive checkpoint toasts from:
+    - `tool.execute.after` action-count reminders
+    - `session.idle` reminder toast
+    - `message.updated` context-usage checkpoint nudge
+  - Keep enforcement in `evaluateAndEnforce` (watchman + debt pipeline), not ad-hoc reminder prompts.
+  - Keep compaction UI messaging informational/non-commanding; actual corrective actions come from watchman/deterministic debt engine.
+- Documentation/update scope for this pass:
+  - `SPEC.md`
+  - `IMPLEMENTATION.md`
+  - `opencontext/README.md`
+  - `opencontext/opencontext/plugin/AGENT_GUIDE.txt`
+
 ## Problem
 One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
 - GCC/OpenContext checkpoint discipline
