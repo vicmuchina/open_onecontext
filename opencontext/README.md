@@ -298,6 +298,7 @@ opencontext law init
 opencontext law validate
 opencontext law doctor
 opencontext law status
+opencontext law watch -n 20
 opencontext law guide
 ```
 
@@ -420,8 +421,10 @@ opencontext commit "Checkpoint after <work>"
 # OpenCode/plugin logs
 opencode --print-logs --log-level DEBUG run "plugin smoke test"
 
-# Law Enforcer trace evidence
-tail -n 50 .GCC/law-enforcer-trace.jsonl
+# Law Enforcer watchman request/response (formatted)
+opencontext law watch -n 20
+# live follow
+opencontext law watch --follow
 ```
 
 6) Plan-agent guard behavior:
@@ -954,7 +957,8 @@ opencontext merge experiment-caching
    ```
 2. Check trace rows:
    ```bash
-   tail -n 50 .GCC/law-enforcer-trace.jsonl
+   opencontext law watch -n 20
+   opencontext law watch --follow
    ```
 3. Confirm provider returns valid JSON-schema output for watchman fields:
    - `violation`

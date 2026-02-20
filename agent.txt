@@ -109,6 +109,9 @@ CHUTES_API_KEY="<key>" ~/.local/share/opencontext/scripts/test-opencode-watchman
 
 - Plugin logs: run opencode with --print-logs --log-level DEBUG
 - Law enforcer trace file: .GCC/law-enforcer-trace.jsonl
+- Formatted watchman request/response:
+  - opencontext law watch -n 20
+  - opencontext law watch --follow
 
 If any test fails
 - Re-copy plugin from source to ~/.config/opencode/plugins/opencontext-reminder.js

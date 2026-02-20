@@ -147,6 +147,7 @@ The plugin will automatically:
 opencontext law init
 opencontext law validate
 opencontext law status
+opencontext law watch -n 20
 opencontext law guide
 ```
 
@@ -188,6 +189,13 @@ Watchman trace logs are written to:
 
 ```bash
 .GCC/law-enforcer-trace.jsonl
+```
+
+Use the built-in formatted watcher (short command):
+
+```bash
+opencontext law watch -n 20
+opencontext law watch --follow
 ```
 
 Agent-facing handbook and editable policy live in:
@@ -274,8 +282,10 @@ opencontext status
 # 5. Launch dashboard
 opencontext tui
 
-# 6. Inspect enforcement evidence while debugging
-tail -n 50 .GCC/law-enforcer-trace.jsonl
+# 6. Inspect watchman request/response evidence (formatted)
+opencontext law watch -n 20
+# live follow
+opencontext law watch --follow
 ```
 
 ## Uninstall

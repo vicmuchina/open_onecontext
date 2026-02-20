@@ -74,9 +74,10 @@ opencontext context --log --lines 80
 ```
 
 ## Verify Enforcement Is Running
-- Check trace file:
+- Check formatted watchman request/response:
 ```bash
-tail -n 50 .GCC/law-enforcer-trace.jsonl
+opencontext law watch -n 20
+opencontext law watch --follow
 ```
 - Check law status:
 ```bash

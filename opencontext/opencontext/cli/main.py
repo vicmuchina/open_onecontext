@@ -4,8 +4,10 @@
 from pathlib import Path
 from textwrap import dedent
 from typing import Dict, List, Optional
+from collections import deque
 import subprocess
 import os
+import time
 
 import click
 import json
@@ -649,6 +651,7 @@ def _render_agent_guide_text(
         - opencontext law init
         - opencontext law validate
         - opencontext law status
+        - opencontext law watch -n 20
         - opencode (or opencode serve --print-logs --log-level DEBUG)
         - opencontext commit "<summary>" at meaningful checkpoints
         - opencontext context --search "<failure/topic>" before retry loops
@@ -658,7 +661,8 @@ def _render_agent_guide_text(
         - Check plugin/service logs:
           opencode --print-logs --log-level DEBUG run "plugin smoke test"
         - Check trace evidence:
-          tail -n 80 .GCC/law-enforcer-trace.jsonl
+          opencontext law watch -n 20
+          opencontext law watch --follow
         - Validate config:
           opencontext law validate
         - Show active settings:
@@ -1053,6 +1057,114 @@ def _validate_law_content(law: Dict) -> List[str]:
     return errors
 
 
+def _resolve_trace_path_from_law_data(law_data: Optional[Dict]) -> Path:
+    trace_name = "law-enforcer-trace.jsonl"
+    if isinstance(law_data, dict):
+        observability = law_data.get("observability", {})
+        if isinstance(observability, dict):
+            candidate = observability.get("traceFile")
+            if isinstance(candidate, str) and candidate.strip():
+                trace_name = candidate.strip()
+
+    trace_path = Path(trace_name)
+    if not trace_path.is_absolute():
+        trace_path = Path.cwd() / ".GCC" / trace_name
+    return trace_path
+
+
+def _compact_trace_text(value: object, max_chars: int = 260) -> str:
+    if value is None:
+        return ""
+    text = " ".join(str(value).split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - 1)] + "…"
+
+
+def _render_watchman_event(event: Dict, include_interrupts: bool = False) -> Optional[Dict[str, str]]:
+    event_type = str(event.get("type", ""))
+    at = str(event.get("at", "unknown-time"))
+    session_id = str(event.get("sessionId", "unknown-session"))
+
+    if event_type == "watchman.request":
+        evidence = event.get("evidence", {}) if isinstance(event.get("evidence"), dict) else {}
+        latest = evidence.get("latestAssistant", {}) if isinstance(evidence.get("latestAssistant"), dict) else {}
+        assistant_text = _compact_trace_text(latest.get("text") or "(empty)")
+        trigger = _compact_trace_text(event.get("trigger") or "-")
+        model = _compact_trace_text(event.get("model") or "-")
+        recent_tools = evidence.get("recentToolCalls", [])
+        debts = evidence.get("debts", {}) if isinstance(evidence.get("debts"), dict) else {}
+
+        lines: List[str] = [
+            f"Session: {session_id}",
+            f"Trigger: {trigger}",
+            f"Model: {model}",
+            f"Assistant: {assistant_text}",
+        ]
+        if debts:
+            lines.append(
+                "Debt: "
+                f"checkpoint={debts.get('pendingCompactionCheckpoint', False)} "
+                f"research={debts.get('pendingResearchCapture', False)} "
+                f"failure={debts.get('pendingFailureLookup', False)}"
+            )
+        if isinstance(recent_tools, list) and recent_tools:
+            lines.append("Recent Tools:")
+            for item in recent_tools[-6:]:
+                if not isinstance(item, dict):
+                    continue
+                tool = _compact_trace_text(item.get("tool") or "?")
+                command_text = _compact_trace_text(item.get("commandText") or item.get("args") or "", 220)
+                lines.append(f"  - {tool}: {command_text}")
+
+        return {
+            "title": f"Watchman Request · {at}",
+            "body": "\n".join(lines),
+            "style": "cyan",
+        }
+
+    if event_type == "watchman.response":
+        verdict = event.get("verdict", {}) if isinstance(event.get("verdict"), dict) else {}
+        reason = verdict.get("reason") or verdict.get("error") or "-"
+        correction = verdict.get("correctionPrompt") or verdict.get("correction_prompt") or "-"
+        model = verdict.get("model") or event.get("model") or "-"
+
+        lines = [
+            f"Session: {session_id}",
+            f"Trigger: {_compact_trace_text(event.get('trigger') or '-')}",
+            f"Model: {_compact_trace_text(model)}",
+            f"Available: {verdict.get('available', False)}",
+            f"Violation: {verdict.get('violation', False)}",
+            f"Rule: {_compact_trace_text(verdict.get('rule') or '-')}",
+            f"Confidence: {verdict.get('confidence', '-')}",
+            f"Reason: {_compact_trace_text(reason)}",
+            f"Correction: {_compact_trace_text(correction)}",
+        ]
+        return {
+            "title": f"Watchman Response · {at}",
+            "body": "\n".join(lines),
+            "style": "green" if verdict.get("violation") else "blue",
+        }
+
+    if include_interrupts and event_type in {"law.interrupt.request", "law.interrupt.injected"}:
+        violation = event.get("violation", {}) if isinstance(event.get("violation"), dict) else {}
+        prompt_text = event.get("prompt", "") if isinstance(event.get("prompt"), str) else ""
+        lines = [
+            f"Session: {session_id}",
+            f"Rule: {_compact_trace_text(violation.get('rule') or '-')}",
+            f"Reason: {_compact_trace_text(violation.get('detail') or '-')}",
+        ]
+        if prompt_text:
+            lines.append(f"Prompt: {_compact_trace_text(prompt_text)}")
+        return {
+            "title": f"{event_type} · {at}",
+            "body": "\n".join(lines),
+            "style": "yellow",
+        }
+
+    return None
+
+
 @cli.group()
 def law():
     """Manage OpenContext Law Enforcer policy, runtime config, and agent guide files."""
@@ -1193,6 +1305,87 @@ def law_status(law_path_opt: Optional[Path]):
         f"Agent guide: {guide_path}"
     )
     console.print(Panel(Text(status_text), title="Law Enforcer Status", border_style="blue"))
+
+
+@law.command("watch")
+@click.option("-n", "--lines", default=20, show_default=True, type=int, help="Number of recent watchman events to show")
+@click.option("-f", "--follow", is_flag=True, help="Follow log output live")
+@click.option("--include-interrupts", is_flag=True, help="Include law.interrupt.* events")
+@click.option("--path", "trace_path_opt", type=click.Path(path_type=Path), help="Path to trace file")
+def law_watch(lines: int, follow: bool, include_interrupts: bool, trace_path_opt: Optional[Path]):
+    """Show formatted watchman request/response logs (chat-style)."""
+    lines = max(1, lines)
+
+    if trace_path_opt:
+        trace_path = trace_path_opt
+    else:
+        law_data: Dict = {}
+        law_path = _resolve_law_path(None)
+        if law_path.exists():
+            try:
+                law_data = _read_law_file(law_path)
+            except Exception:
+                law_data = {}
+        trace_path = _resolve_trace_path_from_law_data(law_data)
+
+    if not trace_path.exists():
+        console.print(f"[red]Trace file not found:[/red] {trace_path}")
+        console.print("[yellow]Run OpenCode with OpenContext plugin enabled, then try again.[/yellow]")
+        raise click.Abort()
+
+    def should_show(event_type: str) -> bool:
+        if event_type in {"watchman.request", "watchman.response"}:
+            return True
+        return include_interrupts and event_type in {"law.interrupt.request", "law.interrupt.injected"}
+
+    def parse_line(raw_line: str) -> Optional[Dict]:
+        raw_line = raw_line.strip()
+        if not raw_line:
+            return None
+        try:
+            event = json.loads(raw_line)
+        except Exception:
+            return None
+        if not isinstance(event, dict):
+            return None
+        if not should_show(str(event.get("type", ""))):
+            return None
+        return event
+
+    def print_event(event: Dict):
+        rendered = _render_watchman_event(event, include_interrupts=include_interrupts)
+        if not rendered:
+            return
+        console.print(Panel(Text(rendered["body"]), title=rendered["title"], border_style=rendered["style"]))
+
+    with trace_path.open("r", encoding="utf-8", errors="replace") as f:
+        initial_events = deque(maxlen=lines)
+        for raw in f:
+            event = parse_line(raw)
+            if event:
+                initial_events.append(event)
+        for event in initial_events:
+            print_event(event)
+
+        if not follow:
+            if not initial_events:
+                console.print("[yellow]No watchman events found yet.[/yellow]")
+            return
+
+        console.print(f"[blue]Following watchman events from:[/blue] {trace_path}")
+        console.print("[dim]Press Ctrl+C to stop.[/dim]")
+        try:
+            while True:
+                raw = f.readline()
+                if not raw:
+                    time.sleep(0.4)
+                    continue
+                event = parse_line(raw)
+                if event:
+                    print_event(event)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped.[/dim]")
+            return
 
 
 @law.command("doctor")
