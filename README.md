@@ -77,4 +77,4 @@ curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/ins
 ```
 
 Project objective in one line:
-- Keep long-running OpenCode work aligned with GCC memory discipline by enforcing checkpoints, model-judged failure/research debts, MCP usage awareness, and trajectory-aware watchman interruptions.
+- Keep long-running OpenCode work aligned with GCC memory discipline via watchman-judged enforcement plus high-confidence suggestion-only memory assistance from prior GCC history.

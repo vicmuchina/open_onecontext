@@ -435,6 +435,9 @@ def _default_law_policy_text() -> str:
            - Create a checkpoint and retrieve recent context history.
         8) Avoid noisy interruptions for non-actionable workflow noise.
            - Read-only discovery, harmless CLI flag mistakes, and transient setup/network issues should not trigger interruption unless they clearly block implementation.
+        9) Use OpenContext memory assistance as guidance, not force.
+           - When prior commits/logs contain relevant insights, suggest them with high confidence.
+           - Do not interrupt only for memory suggestions; interrupt only for true workflow violations.
 
         Customization Notes
         - Keep rules explicit, short, and testable.
@@ -456,6 +459,7 @@ def _default_watchman_system_prompt_text() -> str:
         Judge workflow-law compliance using the provided law summary, policy text, agent guide, recent messages, tool evidence, interruption history, action history, and debt flags.
         Return STRICT JSON only matching the required schema exactly.
         You may return debt_updates to open/clear/keep checkpoint and compaction debt.
+        You may return assist suggestions when prior GCC memory can help the current task.
 
         Core behavior
         - Do not repeat the exact same interruption for an unresolved violation unless there is new evidence.
@@ -468,6 +472,8 @@ def _default_watchman_system_prompt_text() -> str:
         - Interruption is expensive; when evidence is weak or ambiguous, prefer violation=false and lower confidence.
         - False-positive interruptions are worse than occasional misses; prioritize precision over recall.
         - Prefer waiting for persistent/repeated signals before interrupting on non-critical workflow issues.
+        - If high-confidence prior memory can help now, prefer assist.should_suggest=true while keeping violation=false.
+        - Memory assistance is suggestion-only unless there is a true workflow-law violation.
         """
     ).strip() + "\n"
 
@@ -584,6 +590,11 @@ def _render_agent_guide_text(
         - confidence: number
         - optional satisfaction_evidence: string
         - optional debt_updates: pendingCheckpointOverdue|pendingCompactionCheckpoint => open|clear|keep
+        - optional assist:
+          - should_suggest: boolean
+          - confidence: number
+          - reason: string
+          - suggestions[]: title, why_now, action, optional command, memory_refs[]
 
         Malformed Output Handling
         - The plugin requests structured JSON output (default `json_schema`, optional `json_object` fallback).
@@ -598,13 +609,19 @@ def _render_agent_guide_text(
              or in {global_runtime_path} (global).
            - precedence: environment vars > project runtime config > global runtime config > law defaults.
         2) Deterministic behavior config
-           - gcc.*, mcp.*, research.*, watchman.*
+           - gcc.*, mcp.*, research.*, watchman.*, memoryAssist.*
            - Key debt mode controls:
              - gcc.checkpointDebtJudgeMode: model_only | model_first_fallback | deterministic
              - gcc.compactionDebtJudgeMode: model_only | model_first_fallback | deterministic
            - Key watchman memory windows:
              - watchman.includeRecentAlerts
              - watchman.includeRecentActionsAfterAlerts
+           - Key memory-assist controls:
+             - memoryAssist.enabled
+             - memoryAssist.minSuggestConfidence
+             - memoryAssist.maxCandidates
+             - memoryAssist.maxSuggestions
+             - memoryAssist.cooldownSeconds
            - Key noise controls:
              - watchman.inspectToolCalls (default false)
              - watchman.inspectOnIdle (default false)
@@ -686,6 +703,15 @@ def _render_agent_guide_text(
           - includeRecentToolCalls
           - includeRecentAlerts
           - includeRecentActionsAfterAlerts
+        - memoryAssist:
+          - enabled
+          - suggestOnly
+          - minSuggestConfidence
+          - maxCandidates
+          - maxSuggestions
+          - triggers
+          - includeAbandonedWarnings
+          - cooldownSeconds
         - observability:
           - traceEnabled
           - traceFile
@@ -1155,6 +1181,30 @@ def _validate_law_content(law: Dict) -> List[str]:
     else:
         errors.append("watchman must be a mapping/object.")
 
+    memory_assist = law.get("memoryAssist", {})
+    if memory_assist and not isinstance(memory_assist, dict):
+        errors.append("memoryAssist must be a mapping/object.")
+    elif isinstance(memory_assist, dict):
+        if "enabled" in memory_assist and not isinstance(memory_assist.get("enabled"), bool):
+            errors.append("memoryAssist.enabled must be true or false.")
+        if "suggestOnly" in memory_assist and not isinstance(memory_assist.get("suggestOnly"), bool):
+            errors.append("memoryAssist.suggestOnly must be true or false.")
+        if "minSuggestConfidence" in memory_assist:
+            value = memory_assist.get("minSuggestConfidence")
+            if not isinstance(value, (int, float)) or value < 0 or value > 1:
+                errors.append("memoryAssist.minSuggestConfidence must be a number between 0 and 1.")
+        for key in ["maxCandidates", "maxSuggestions", "cooldownSeconds"]:
+            if key in memory_assist and not isinstance(memory_assist.get(key), (int, float)):
+                errors.append(f"memoryAssist.{key} must be a number.")
+        if "triggers" in memory_assist:
+            triggers = memory_assist.get("triggers")
+            if not isinstance(triggers, list) or not all(isinstance(item, str) for item in triggers):
+                errors.append("memoryAssist.triggers must be a list of strings.")
+        if "includeAbandonedWarnings" in memory_assist and not isinstance(
+            memory_assist.get("includeAbandonedWarnings"), bool
+        ):
+            errors.append("memoryAssist.includeAbandonedWarnings must be true or false.")
+
     custom = law.get("custom", {})
     if custom and not isinstance(custom, dict):
         errors.append("custom must be a mapping/object.")
@@ -1292,6 +1342,7 @@ def _render_watchman_event(event: Dict, include_interrupts: bool = False) -> Opt
         verdict = event.get("verdict", {}) if isinstance(event.get("verdict"), dict) else {}
         reason = verdict.get("reason") or verdict.get("error") or "-"
         correction = verdict.get("correctionPrompt") or verdict.get("correction_prompt") or "-"
+        assist = verdict.get("assist", {}) if isinstance(verdict.get("assist"), dict) else {}
         model = verdict.get("model") or event.get("model") or "-"
 
         lines = [
@@ -1305,6 +1356,12 @@ def _render_watchman_event(event: Dict, include_interrupts: bool = False) -> Opt
             f"Reason: {_compact_trace_text(reason)}",
             f"Correction: {_compact_trace_text(correction)}",
         ]
+        if assist:
+            lines.append(
+                "Assist: "
+                f"suggest={assist.get('shouldSuggest', assist.get('should_suggest', False))} "
+                f"confidence={assist.get('confidence', '-')}"
+            )
         return {
             "title": f"Watchman Response · {at}",
             "body": "\n".join(lines),
@@ -1428,6 +1485,12 @@ def law_status(law_path_opt: Optional[Path]):
     watchman_prompt_file = law_data.get("watchman", {}).get("systemPromptFile", LAW_WATCHMAN_PROMPT_FILENAME)
     watchman_alerts = law_data.get("watchman", {}).get("includeRecentAlerts", "unknown")
     watchman_post_alert_actions = law_data.get("watchman", {}).get("includeRecentActionsAfterAlerts", "unknown")
+    memory_assist_enabled = law_data.get("memoryAssist", {}).get("enabled", "unknown")
+    memory_assist_suggest_only = law_data.get("memoryAssist", {}).get("suggestOnly", "unknown")
+    memory_assist_conf = law_data.get("memoryAssist", {}).get("minSuggestConfidence", "unknown")
+    memory_assist_candidates = law_data.get("memoryAssist", {}).get("maxCandidates", "unknown")
+    memory_assist_suggestions = law_data.get("memoryAssist", {}).get("maxSuggestions", "unknown")
+    memory_assist_cooldown = law_data.get("memoryAssist", {}).get("cooldownSeconds", "unknown")
     compaction_mode = law_data.get("gcc", {}).get("compactionDebtJudgeMode", "unknown")
     research_policy_file = law_data.get("research", {}).get("capturePolicyFile", LAW_RESEARCH_POLICY_FILENAME)
     research_classifier_enabled = law_data.get("research", {}).get("captureClassifierEnabled", "unknown")
@@ -1467,6 +1530,12 @@ def law_status(law_path_opt: Optional[Path]):
         f"Watchman require model decision: {watchman_model_only}\n"
         f"Watchman recent alerts window: {watchman_alerts}\n"
         f"Watchman post-alert action window: {watchman_post_alert_actions}\n"
+        f"Memory assist enabled: {memory_assist_enabled}\n"
+        f"Memory assist suggest-only: {memory_assist_suggest_only}\n"
+        f"Memory assist min confidence: {memory_assist_conf}\n"
+        f"Memory assist max candidates: {memory_assist_candidates}\n"
+        f"Memory assist max suggestions: {memory_assist_suggestions}\n"
+        f"Memory assist cooldown seconds: {memory_assist_cooldown}\n"
         f"Research classifier enabled: {research_classifier_enabled}\n"
         f"Research classifier min confidence: {research_classifier_conf}\n"
         f"Research classifier require model decision: {research_classifier_model_only}\n"

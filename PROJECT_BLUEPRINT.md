@@ -8,6 +8,7 @@ OpenContext is a Git-like context controller (GCC) for long-horizon LLM coding w
 - Enforce disciplined workflow in OpenCode sessions.
 - Reduce repeated failures by requiring context lookup before retries.
 - Capture useful research and decisions so future sessions can resume fast.
+- Surface high-confidence prior GCC insights as suggestion-only memory assist during active work.
 
 ## Non-Goals
 - Not a hard task blocker for every action.

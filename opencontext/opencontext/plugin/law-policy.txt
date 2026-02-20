@@ -21,6 +21,9 @@ Default Balanced Policy (active immediately)
    - Create a checkpoint and retrieve recent context history.
 8) Avoid noisy interruptions for non-actionable workflow noise.
    - Read-only discovery, harmless CLI flag mistakes, and transient setup/network issues should not trigger interruption unless they clearly block implementation.
+9) Use OpenContext memory assistance as guidance, not force.
+   - When prior commits/logs contain relevant insights, suggest them with confidence.
+   - Do not interrupt only for memory suggestions; interrupt only for true workflow violations.
 
 Customization Notes
 - Keep rules explicit, short, and testable.

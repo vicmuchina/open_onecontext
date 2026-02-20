@@ -106,6 +106,7 @@ Edit `.GCC/law-enforcer.json`:
 - Response format strategy (`critic.responseFormatStrategy`: `json_schema`, `json_object`, or `json_schema_then_json_object`)
 - Strict retry count (`critic.strictJsonRetryAttempts`)
 - Planning guards (`gcc.skipCheckpointDuringPlanningAgent`, `watchman.skipDuringPlanningAgent`)
+- Memory assistance behavior (`memoryAssist.*`) for suggestion-only prior-memory guidance
 - Custom rules (`custom.rules`) and escalation (`custom.escalation`)
 
 Edit `.GCC/law-policy.txt` for natural-language laws watched continuously by the enforcer model.
@@ -118,6 +119,11 @@ If you want model-only judgment (no fallback decisions), set in `.GCC/law-enforc
 - `gcc.checkpointDebtJudgeMode: "model_only"`
 - `gcc.compactionDebtJudgeMode: "model_only"`
 - `watchman.requireModelDecision: true`
+- Keep memory help high-precision and non-mechanistic:
+  - `memoryAssist.enabled: true`
+  - `memoryAssist.suggestOnly: true`
+  - `memoryAssist.minSuggestConfidence: 0.82`
+  - `memoryAssist.triggers: ["assistant_turn"]`
 Edit `.GCC/law-runtime.json` for project-local API key/model overrides.
 Use `.GCC/AGENT_GUIDE.txt` as the full agent-readable customization handbook.
 
@@ -131,6 +137,7 @@ Run before pushing major changes:
 node scripts/test-opencode-plugin-law.mjs
 node scripts/test-opencode-plugin-research.mjs
 node scripts/test-opencode-plugin-watchman.mjs
+node scripts/test-opencode-plugin-memory-assist.mjs
 node scripts/test-opencode-plugin-trace.mjs
 node scripts/test-opencode-plugin-watchman-malformed.mjs
 node scripts/test-opencode-plugin-provider-config.mjs

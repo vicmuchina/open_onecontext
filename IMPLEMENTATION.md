@@ -119,6 +119,20 @@ Deterministic debt triggers based on simple patterns are brittle in dynamic Open
   - `opencontext/README.md`
   - `opencontext/opencontext/plugin/AGENT_GUIDE.txt`
 
+### Continuation Checkpoint (2026-02-20, Watchman-Guided Memory Assist)
+
+- Requirement accepted: OpenContext memory should actively help agents in-context, but without mechanistic forcing.
+- Implementation direction locked:
+  - Add memory-assist candidate retrieval from existing GCC artifacts and semantic history matches.
+  - Pass candidates to watchman in the same structured payload.
+  - Extend watchman schema with optional `assist` block for suggestion-only guidance.
+  - Add non-interrupting memory suggestion path gated by high confidence + cooldown.
+  - Keep hard interruption path unchanged and reserved for workflow violations.
+- Decision on retrieval architecture:
+  - no separate STM/LTM subsystem in this phase
+  - no separate vector DB/service in this phase
+  - rely on local GCC files + semantic overlap scoring + watchman adjudication
+
 ## Problem
 One-time prompt injection is not sufficient in long coding sessions. Agents often ignore workflow rules while focused on implementation, especially around:
 - GCC/OpenContext checkpoint discipline

@@ -123,6 +123,23 @@ In `.GCC/`:
   - structured debt flags/transitions
   - configurable deterministic modes only when explicitly selected by policy owners
 
+### Continuation Checkpoint (2026-02-20, Watchman-Guided Memory Assist)
+
+- Objective locked: keep Law Enforcer non-mechanistic while making OpenContext memory actively useful during long runs.
+- New behavioral contract:
+  - watchman remains primary judge
+  - memory help is suggestion-only (non-interrupting)
+  - high-confidence threshold required before any memory suggestion is shown
+  - interruptions remain reserved for true workflow-law violations
+- Memory retrieval strategy:
+  - source from existing `.GCC` memory artifacts (main/commit/log/metadata tails + semantic matches)
+  - rank by current task/failure context, recent commands/output, and unresolved debt state
+  - inject only top relevant snippets with provenance (no bulk memory injection)
+- Overhead policy:
+  - no extra mandatory model pass beyond existing watchman call
+  - reuse existing watchman payload and GCC evidence collection
+  - keep `inspectToolCalls=false` and `inspectOnIdle=false` defaults for low-noise operation
+
 ---
 
 ## Architecture

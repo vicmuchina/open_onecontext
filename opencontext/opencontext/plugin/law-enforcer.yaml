@@ -68,6 +68,15 @@ watchman:
 observability:
   traceEnabled: true
   traceFile: law-enforcer-trace.jsonl
+memoryAssist:
+  enabled: true
+  suggestOnly: true
+  minSuggestConfidence: 0.82
+  maxCandidates: 8
+  maxSuggestions: 3
+  triggers: [assistant_turn]
+  includeAbandonedWarnings: true
+  cooldownSeconds: 120
 
 custom:
   enabled: true

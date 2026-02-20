@@ -33,6 +33,7 @@ This document explains exactly how the OpenCode plugin enforces workflow laws.
 4. `message.updated` (assistant completion)
 - Captures assistant identity/model.
 - Runs watchman inspection on completed assistant turns by default (`watchman.inspectAssistantTurns=true`).
+- Can emit suggestion-only memory assistance from prior GCC history when confidence is high (`memoryAssist.*`).
 
 5. `session.idle`
 - Safety pass when session becomes idle.
@@ -66,6 +67,8 @@ Watchman must return:
 - Optional:
   - `satisfaction_evidence` (string)
   - `debt_updates` object with `pendingCheckpointOverdue` and `pendingCompactionCheckpoint` (`open|clear|keep`)
+  - `assist` object for suggestion-only memory guidance:
+    - `should_suggest`, `confidence`, `reason`, `suggestions[]`
 
 Critic must return:
 - `enforce` (boolean)

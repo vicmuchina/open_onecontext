@@ -110,6 +110,16 @@ const DEFAULT_LAW = {
     traceEnabled: true,
     traceFile: "law-enforcer-trace.jsonl",
   },
+  memoryAssist: {
+    enabled: true,
+    suggestOnly: true,
+    minSuggestConfidence: 0.82,
+    maxCandidates: 8,
+    maxSuggestions: 3,
+    triggers: ["assistant_turn"],
+    includeAbandonedWarnings: true,
+    cooldownSeconds: 120,
+  },
   custom: {
     enabled: true,
     policyFile: "law-policy.txt",
@@ -198,6 +208,34 @@ const WATCHMAN_RESPONSE_SCHEMA = {
         },
       },
     },
+    assist: {
+      type: "object",
+      additionalProperties: false,
+      required: ["should_suggest", "confidence", "reason", "suggestions"],
+      properties: {
+        should_suggest: { type: "boolean" },
+        confidence: { type: "number" },
+        reason: { type: "string" },
+        suggestions: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "why_now", "action", "memory_refs"],
+            properties: {
+              title: { type: "string" },
+              why_now: { type: "string" },
+              action: { type: "string" },
+              command: { type: "string" },
+              memory_refs: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
   },
 };
 
@@ -256,6 +294,8 @@ function getSessionState(sessionId) {
       lastCompactionAt: 0,
       lastCommitAt: 0,
       lastContextRecoveryAt: 0,
+      lastMemoryAssistAt: 0,
+      lastMemoryAssistSignature: "",
     });
   }
   return sessionStateById.get(resolvedSessionId);
@@ -808,6 +848,68 @@ function sanitizeLaw(law) {
   if (!Array.isArray(sanitized.research.docsKeywords)) {
     sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
   }
+  sanitized.memoryAssist =
+    sanitized.memoryAssist && typeof sanitized.memoryAssist === "object"
+      ? sanitized.memoryAssist
+      : {};
+  sanitized.memoryAssist.enabled = toBool(
+    sanitized.memoryAssist.enabled,
+    DEFAULT_LAW.memoryAssist.enabled
+  );
+  sanitized.memoryAssist.suggestOnly = toBool(
+    sanitized.memoryAssist.suggestOnly,
+    DEFAULT_LAW.memoryAssist.suggestOnly
+  );
+  sanitized.memoryAssist.minSuggestConfidence = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.memoryAssist.minSuggestConfidence
+          ?? DEFAULT_LAW.memoryAssist.minSuggestConfidence
+      )
+    )
+  );
+  sanitized.memoryAssist.maxCandidates = Math.max(
+    2,
+    Math.min(
+      20,
+      Math.round(
+        Number(sanitized.memoryAssist.maxCandidates ?? DEFAULT_LAW.memoryAssist.maxCandidates)
+      )
+    )
+  );
+  sanitized.memoryAssist.maxSuggestions = Math.max(
+    1,
+    Math.min(
+      8,
+      Math.round(
+        Number(sanitized.memoryAssist.maxSuggestions ?? DEFAULT_LAW.memoryAssist.maxSuggestions)
+      )
+    )
+  );
+  sanitized.memoryAssist.triggers = normalizeStringArray(
+    sanitized.memoryAssist.triggers,
+    DEFAULT_LAW.memoryAssist.triggers
+  )
+    .map(normalizeRuleTrigger)
+    .filter((value) => ["assistant_turn", "tool_call", "compaction", "idle"].includes(value));
+  if (sanitized.memoryAssist.triggers.length === 0) {
+    sanitized.memoryAssist.triggers = [...DEFAULT_LAW.memoryAssist.triggers];
+  }
+  sanitized.memoryAssist.includeAbandonedWarnings = toBool(
+    sanitized.memoryAssist.includeAbandonedWarnings,
+    DEFAULT_LAW.memoryAssist.includeAbandonedWarnings
+  );
+  sanitized.memoryAssist.cooldownSeconds = Math.max(
+    0,
+    Math.min(
+      3600,
+      Math.round(
+        Number(sanitized.memoryAssist.cooldownSeconds ?? DEFAULT_LAW.memoryAssist.cooldownSeconds)
+      )
+    )
+  );
   sanitized.research.capturePolicyFile =
     typeof sanitized.research.capturePolicyFile === "string" &&
     sanitized.research.capturePolicyFile.trim()
@@ -1064,6 +1166,7 @@ function defaultWatchmanSystemPrompt() {
     "Judge workflow-law compliance using provided law summary, policy text, agent guide, messages, tool calls, and debt flags.",
     "Return STRICT JSON only (no prose/markdown) matching schema fields exactly.",
     "You may return debt_updates to open/clear/keep checkpoint and compaction debt.",
+    "You may return assist suggestions when prior GCC memory can help the current task.",
     "Critical behavior:",
     "- Do not request duplicate interruption for the exact same unresolved violation without new evidence.",
     "- Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied before alerting again.",
@@ -1074,6 +1177,8 @@ function defaultWatchmanSystemPrompt() {
     "- Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient setup/network/dependency noise) unless repeated behavior clearly blocks implementation.",
     "- Interruption is expensive; if evidence is ambiguous, prefer violation=false and lower confidence.",
     "- For non-critical workflow issues, prefer persistent/repeated signals before interrupting.",
+    "- If high-confidence prior memory can help now, prefer assist.should_suggest=true while keeping violation=false.",
+    "- Memory assistance is suggestion-only unless there is a true workflow-law violation.",
   ].join("\n");
 }
 
@@ -1808,6 +1913,11 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     recentDebtTransitions.map((entry) => `${entry.debt}:${entry.action}`).join("\n"),
   ]);
   const gccHistory = collectGccHistoryEvidence(directory, historyQuery);
+  const memoryAssistCandidates = buildMemoryAssistCandidates({
+    law,
+    state,
+    gccHistory,
+  });
   return {
     sessionId,
     recentMessages: summarized,
@@ -1817,6 +1927,7 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     postAlertActions,
     recentDebtTransitions,
     gccHistory,
+    memoryAssistCandidates,
     debts: {
       pendingCompactionCheckpoint: state.pendingCompactionCheckpoint,
       pendingCheckpointOverdue: state.pendingCheckpointOverdue,
@@ -1889,6 +2000,16 @@ function buildLawSummaryForInspector(law) {
       includeRecentAlerts: law.watchman.includeRecentAlerts,
       includeRecentActionsAfterAlerts: law.watchman.includeRecentActionsAfterAlerts,
     },
+    memoryAssist: {
+      enabled: law.memoryAssist.enabled,
+      suggestOnly: law.memoryAssist.suggestOnly,
+      minSuggestConfidence: law.memoryAssist.minSuggestConfidence,
+      maxCandidates: law.memoryAssist.maxCandidates,
+      maxSuggestions: law.memoryAssist.maxSuggestions,
+      triggers: law.memoryAssist.triggers,
+      includeAbandonedWarnings: law.memoryAssist.includeAbandonedWarnings,
+      cooldownSeconds: law.memoryAssist.cooldownSeconds,
+    },
     cliCapabilities: law.cliCapabilities || {},
     runtime: {
       criticConfigSources: law?.critic?.runtimeConfigSources || [],
@@ -1953,6 +2074,90 @@ function buildHistoryQueryFromState(state, extras = []) {
     if (text) parts.push(text);
   }
   return clipText(parts.join("\n\n"), 3000);
+}
+
+function inferMemoryCandidateType(snippet = "") {
+  const text = toLowerSafe(snippet);
+  if (
+    text.includes("abandon") ||
+    text.includes("rollback") ||
+    text.includes("regression") ||
+    text.includes("didn't work")
+  ) {
+    return "failed_attempt";
+  }
+  if (
+    text.includes("decide") ||
+    text.includes("decision") ||
+    text.includes("standard") ||
+    text.includes("constraint") ||
+    text.includes("must")
+  ) {
+    return "decision";
+  }
+  if (
+    text.includes("fix") ||
+    text.includes("resolved") ||
+    text.includes("pass") ||
+    text.includes("working")
+  ) {
+    return "prior_fix";
+  }
+  return "learning";
+}
+
+function extractCommitSummaryCandidates(commitText = "", limit = 6) {
+  const rows = [];
+  if (!commitText) return rows;
+  const re = /\*\*Summary:\*\*\s*(.+)/g;
+  let match;
+  let idx = 0;
+  while ((match = re.exec(commitText)) !== null && idx < limit) {
+    const summary = clipText(match[1] || "", 260);
+    if (!summary) continue;
+    rows.push({
+      source: ".GCC/branches/*/commit.md",
+      score: 0.2,
+      snippet: summary,
+    });
+    idx += 1;
+  }
+  return rows;
+}
+
+function buildMemoryAssistCandidates({ law, state, gccHistory }) {
+  const maxCandidates = Number(law?.memoryAssist?.maxCandidates || 8);
+  const semantic = Array.isArray(gccHistory?.semanticMatches) ? gccHistory.semanticMatches : [];
+  const commitFallback = extractCommitSummaryCandidates(gccHistory?.files?.commit || "", maxCandidates);
+  const merged = [...semantic, ...commitFallback];
+  const deduped = [];
+  const seen = new Set();
+  let index = 0;
+  for (const row of merged) {
+    const snippet = clipText(row?.snippet || "", 320);
+    if (!snippet) continue;
+    const source = String(row?.source || "");
+    const dedupeKey = `${source}::${snippet}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const type = inferMemoryCandidateType(snippet);
+    const score = Number(row?.score ?? 0);
+    const commandHint = state?.pendingFailureLookup
+      ? 'opencontext context --search "<failure or fix topic>" --limit 20'
+      : 'opencontext context --search "<feature or decision>" --limit 20';
+    deduped.push({
+      id: `${source || "gcc"}:${index + 1}`,
+      source,
+      type,
+      score: Number.isFinite(score) ? Number(score.toFixed(3)) : 0,
+      summary: snippet,
+      command_hint: commandHint,
+      memory_ref: source || ".GCC",
+    });
+    index += 1;
+    if (deduped.length >= maxCandidates) break;
+  }
+  return deduped;
 }
 
 function shouldInspectCustomRuleForTrigger(rule, trigger) {
@@ -2474,6 +2679,48 @@ function extractWatchmanDebtUpdates(parsed) {
   };
 }
 
+function normalizeAssistSuggestion(raw) {
+  const item = raw && typeof raw === "object" ? raw : {};
+  const refs = Array.isArray(item.memory_refs)
+    ? item.memory_refs.map((entry) => String(entry || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  return {
+    title: clipText(item.title || "Memory insight", 120),
+    whyNow: clipText(item.why_now || "", 220),
+    action: clipText(item.action || "", 220),
+    command: clipText(item.command || "", 180),
+    memoryRefs: refs,
+  };
+}
+
+function extractWatchmanAssist(parsed, law) {
+  const assist = parsed?.assist;
+  if (!assist || typeof assist !== "object") {
+    return {
+      shouldSuggest: false,
+      confidence: 0,
+      reason: "",
+      suggestions: [],
+    };
+  }
+  const rawSuggestions = Array.isArray(assist.suggestions) ? assist.suggestions : [];
+  const maxSuggestions = Math.max(
+    1,
+    Number(law?.memoryAssist?.maxSuggestions || DEFAULT_LAW.memoryAssist.maxSuggestions)
+  );
+  const suggestions = rawSuggestions
+    .map(normalizeAssistSuggestion)
+    .filter((entry) => entry.action || entry.whyNow || entry.command)
+    .slice(0, maxSuggestions);
+  const confidence = Number(assist.confidence ?? 0);
+  return {
+    shouldSuggest: assist.should_suggest === true && suggestions.length > 0,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    reason: clipText(assist.reason || "", 320),
+    suggestions,
+  };
+}
+
 function isValidFailureLookupParsed(parsed) {
   return (
     parsed &&
@@ -2908,6 +3155,7 @@ async function runWatchmanCheck(client, law, payload) {
     const confidence = Number(parsed?.confidence ?? 0);
     const debtUpdates = extractWatchmanDebtUpdates(parsed);
     const satisfactionEvidence = clipText(parsed?.satisfaction_evidence || "", 600);
+    const assist = extractWatchmanAssist(parsed, law);
     return {
       available: true,
       violation,
@@ -2918,6 +3166,7 @@ async function runWatchmanCheck(client, law, payload) {
       confidence: Number.isFinite(confidence) ? confidence : 0,
       debtUpdates,
       satisfactionEvidence,
+      assist,
       model: result.modelUsed || primaryModel,
       responseFormat: result.responseFormat || "",
       apiKeyEnv: sourceEnv,
@@ -3104,6 +3353,97 @@ function applyWatchmanDebtUpdates(state, debtUpdates, ruleName = "") {
     }
   }
   recomputeViolationDebt(state);
+}
+
+function buildMemoryAssistPrompt(assist) {
+  const suggestions = Array.isArray(assist?.suggestions) ? assist.suggestions : [];
+  const lines = [
+    "OpenContext Memory Assist (suggestion only):",
+  ];
+  if (assist?.reason) {
+    lines.push(`Reason: ${assist.reason}`);
+  }
+  for (const [index, item] of suggestions.entries()) {
+    lines.push("");
+    lines.push(`${index + 1}. ${item.title || "Relevant prior memory"}`);
+    if (item.whyNow) lines.push(`Why now: ${item.whyNow}`);
+    if (item.action) lines.push(`Suggested action: ${item.action}`);
+    if (item.command) lines.push(`Command hint: ${item.command}`);
+    if (Array.isArray(item.memoryRefs) && item.memoryRefs.length > 0) {
+      lines.push(`Memory refs: ${item.memoryRefs.join(", ")}`);
+    }
+  }
+  lines.push("");
+  lines.push("Use these only if they fit the current task.");
+  return lines.join("\n");
+}
+
+async function maybeSuggestMemoryAssist({
+  client,
+  directory,
+  law,
+  state,
+  trigger,
+  verdict,
+  evidence,
+}) {
+  if (!law?.memoryAssist?.enabled) return false;
+  if (law?.memoryAssist?.suggestOnly === false) {
+    // v1 behavior keeps memory assistance non-interrupting even if suggestOnly is disabled.
+    // This flag is reserved for future escalation modes.
+  }
+  if (!Array.isArray(law?.memoryAssist?.triggers) || !law.memoryAssist.triggers.includes(trigger)) {
+    return false;
+  }
+  const assist = verdict?.assist;
+  if (!assist?.shouldSuggest) return false;
+  const confidence = Number(assist?.confidence ?? 0);
+  const minConfidence = Number(law?.memoryAssist?.minSuggestConfidence ?? 0.82);
+  if (!Number.isFinite(confidence) || confidence < minConfidence) return false;
+  if (!Array.isArray(assist?.suggestions) || assist.suggestions.length === 0) return false;
+
+  const now = Date.now();
+  const cooldownMs = Math.max(0, Number(law?.memoryAssist?.cooldownSeconds || 0) * 1000);
+  if (cooldownMs > 0 && now - Number(state?.lastMemoryAssistAt || 0) < cooldownMs) {
+    return false;
+  }
+
+  const signature = assist.suggestions
+    .map((item) => `${item.title}|${item.action}|${(item.memoryRefs || []).join(",")}`)
+    .join("||");
+  if (signature && signature === state?.lastMemoryAssistSignature) {
+    return false;
+  }
+
+  const promptText = buildMemoryAssistPrompt(assist);
+  const injected = await injectContinuation(client, directory, state, promptText);
+  if (!injected) return false;
+
+  state.lastMemoryAssistAt = now;
+  state.lastMemoryAssistSignature = signature;
+  await appendLawTrace(client, directory, law, {
+    type: "memory_assist.suggested",
+    sessionId: state.sessionId,
+    trigger,
+    confidence,
+    minConfidence,
+    reason: assist.reason || "",
+    suggestions: assist.suggestions,
+    topCandidateSources: (evidence?.memoryAssistCandidates || []).slice(0, 3).map((row) => row.source || ""),
+  });
+  await log(client, "info", "law.memory_assist.suggested", {
+    sessionId: state.sessionId,
+    trigger,
+    confidence,
+    minConfidence,
+    suggestions: assist.suggestions.length,
+  });
+  await toast(client, {
+    type: "info",
+    timeout: 7000,
+    message: `🧠 OpenContext memory assist suggested ${assist.suggestions.length} prior insight(s).`,
+  });
+  return true;
 }
 
 function shouldHardInterruptCustomRule(law, violationCount, ruleSpecificThreshold = null) {
@@ -3501,6 +3841,7 @@ async function evaluateAndEnforce({
       recentMessages: evidence.recentMessages,
       recentToolCalls: evidence.recentToolCalls,
       gccHistory: evidence.gccHistory,
+      memoryAssistCandidates: evidence.memoryAssistCandidates,
       debts: evidence.debts,
       customRuleCounters: state.customRuleViolations,
       deterministicCandidates: [...violations, ...modelDebtCandidates].map((violation) => ({
@@ -3527,6 +3868,10 @@ async function evaluateAndEnforce({
           currentBranch: evidence?.gccHistory?.currentBranch || "",
           semanticMatches: (evidence?.gccHistory?.semanticMatches || []).slice(0, 3),
         },
+        memoryAssistCandidates: (evidence?.memoryAssistCandidates || []).slice(
+          0,
+          Number(law?.memoryAssist?.maxCandidates || 8)
+        ),
         debts: evidence.debts,
         customRuleCounters: state.customRuleViolations,
         lawPolicyText: clipText(law?.custom?.policyText || "", 1200),
@@ -3561,6 +3906,8 @@ async function evaluateAndEnforce({
       attempts: verdict.attempts || 1,
       debtUpdates: verdict.debtUpdates || {},
       satisfactionEvidence: verdict.satisfactionEvidence || "",
+      assistSuggested: Boolean(verdict?.assist?.shouldSuggest),
+      assistConfidence: Number(verdict?.assist?.confidence ?? 0),
     });
 
     applyWatchmanDebtUpdates(state, verdict?.debtUpdates, verdict?.rule || "");
@@ -3593,6 +3940,17 @@ async function evaluateAndEnforce({
           confidence,
           minConfidence,
           rule: verdict.rule || "",
+        });
+      }
+      if (verdict.available) {
+        await maybeSuggestMemoryAssist({
+          client,
+          directory,
+          law,
+          state,
+          trigger,
+          verdict,
+          evidence,
         });
       }
       const allowPolicyFallback = !verdict.available && !law?.watchman?.requireModelDecision;

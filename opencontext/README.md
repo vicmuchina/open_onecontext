@@ -217,6 +217,9 @@ node ./scripts/test-opencode-plugin-law.mjs
 # Run assistant-turn watchman interruption test (model mocked)
 node ./scripts/test-opencode-plugin-watchman.mjs
 
+# Run memory-assist suggestion-only test (model mocked)
+node ./scripts/test-opencode-plugin-memory-assist.mjs
+
 # Run watchman trace logging test (request/response + tool evidence)
 node ./scripts/test-opencode-plugin-trace.mjs
 
@@ -367,6 +370,7 @@ Decision model (plain terms):
 - Failure retry gating is model-judged first (via the failure policy prompt in `.GCC/law-failure-policy.txt`).
 - Research capture debt is model-judged first (via `.GCC/law-research-policy.txt`).
 - Watchman interruption is model-judged with confidence threshold (`watchman.minConfidence`) and optional model-only mode (`watchman.requireModelDecision`).
+- Watchman memory assistance is suggestion-only and confidence-gated (`memoryAssist.minSuggestConfidence`).
 - Default watchman system prompt is precision-biased to reduce noise (read-only exploration/setup/CLI noise should not interrupt unless clearly actionable).
 - Lightweight pattern checks are only a trigger/fallback safety net.
 - If you want model-only judgment (no fallback decisions), set:
@@ -754,6 +758,11 @@ The OpenCode plugin hooks into OpenCode's event system:
 - Optional output fields: `satisfaction_evidence`, `debt_updates`
   - `debt_updates.pendingCheckpointOverdue`: `open|clear|keep`
   - `debt_updates.pendingCompactionCheckpoint`: `open|clear|keep`
+- Optional memory assistance field: `assist` (suggestion-only guidance)
+  - `assist.should_suggest`: boolean
+  - `assist.confidence`: number
+  - `assist.reason`: string
+  - `assist.suggestions[]`: `title`, `why_now`, `action`, optional `command`, `memory_refs[]`
 - Malformed/free-text responses trigger strict retry first, then are logged as parse errors if still invalid
 
 ## Evolution Tracking
@@ -872,6 +881,16 @@ Example `law-runtime.json`:
     "includeRecentAlerts": 12,
     "includeRecentActionsAfterAlerts": 20
   },
+  "memoryAssist": {
+    "enabled": true,
+    "suggestOnly": true,
+    "minSuggestConfidence": 0.82,
+    "maxCandidates": 8,
+    "maxSuggestions": 3,
+    "triggers": ["assistant_turn"],
+    "includeAbandonedWarnings": true,
+    "cooldownSeconds": 120
+  },
   "custom": {
     "policyFile": "law-policy.txt",
     "escalation": {
@@ -916,7 +935,8 @@ Customizing without code changes:
 5. Edit `.GCC/law-enforcer.json` -> `custom.rules` for trigger-based checks.
 6. Edit `.GCC/law-enforcer.json` -> `custom.hints` to advertise preferred tools/skills/commands/MCPs.
 7. Edit `.GCC/law-enforcer.json` -> `custom.escalation` to tune soft reminder vs hard interruption.
-8. Run `opencontext law validate`, `opencontext law doctor`, and `opencontext law guide`.
+8. Edit `.GCC/law-enforcer.json` -> `memoryAssist` to tune suggestion confidence/cadence.
+9. Run `opencontext law validate`, `opencontext law doctor`, and `opencontext law guide`.
 
 ## Examples
 
