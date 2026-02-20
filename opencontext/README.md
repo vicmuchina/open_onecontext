@@ -344,6 +344,7 @@ Decision model (plain terms):
 - Failure retry gating is model-judged first (via the failure policy prompt in `.GCC/law-failure-policy.txt`).
 - Research capture debt is model-judged first (via `.GCC/law-research-policy.txt`).
 - Watchman interruption is model-judged with confidence threshold (`watchman.minConfidence`) and optional model-only mode (`watchman.requireModelDecision`).
+- Default watchman system prompt is precision-biased to reduce noise (read-only exploration/setup/CLI noise should not interrupt unless clearly actionable).
 - Lightweight pattern checks are only a trigger/fallback safety net.
 - If you want model-only judgment (no fallback decisions), set:
   - `gcc.failureClassifierRequireModelDecision: true`

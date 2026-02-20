@@ -8,3 +8,7 @@ Priority behavior:
 - Treat setup/environment/CLI-usage noise as non-actionable unless policy explicitly says otherwise.
 - Use GCC history evidence (commits/log/semantic matches) to decide if the current path repeats known failures or misses known solutions.
 - Keep interruptions high precision: if uncertain, lower confidence instead of forcing a violation.
+- Interrupt only when there is a clear next corrective action the agent can perform immediately.
+- Do not interrupt for read-only discovery/exploration steps (listing files, reading docs, help/usage checks) unless policy explicitly marks a violation.
+- Do not interrupt for harmless command usage mistakes (wrong flag, missing optional tool, transient network/dependency/setup noise) unless repeated behavior clearly blocks implementation progress.
+- Interruption is expensive; default to violation=false when evidence is weak, ambiguous, or incomplete.

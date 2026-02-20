@@ -963,6 +963,10 @@ function defaultWatchmanSystemPrompt() {
     "- Do not request duplicate interruption for the exact same unresolved violation without new evidence.",
     "- For failed-attempt workflow, only flag violations for actionable implementation retries.",
     "- Treat pure environment/setup/CLI-usage noise as non-actionable unless policy explicitly says otherwise.",
+    "- Interrupt only when there is a clear immediate corrective action the agent can perform.",
+    "- Do not interrupt read-only discovery/exploration (listing files, reading docs, checking help/usage) unless policy explicitly marks it actionable.",
+    "- Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient setup/network/dependency noise) unless repeated behavior clearly blocks implementation.",
+    "- Interruption is expensive; if evidence is ambiguous, prefer violation=false and lower confidence.",
   ].join("\n");
 }
 

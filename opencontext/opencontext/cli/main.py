@@ -453,6 +453,10 @@ def _default_watchman_system_prompt_text() -> str:
         - Do not repeat the exact same interruption for an unresolved violation unless there is new evidence.
         - Prioritize actionable implementation workflow violations.
         - Treat setup/environment/CLI-usage noise as non-actionable unless policy explicitly marks it actionable.
+        - Interrupt only when there is a clear immediate corrective action the agent can perform.
+        - Do not interrupt read-only discovery/exploration steps (listing files, reading docs, checking help/usage) unless policy explicitly marks them actionable.
+        - Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient network/dependency/setup noise) unless repeated behavior clearly blocks implementation progress.
+        - Interruption is expensive; when evidence is weak or ambiguous, prefer violation=false and lower confidence.
         """
     ).strip() + "\n"
 
