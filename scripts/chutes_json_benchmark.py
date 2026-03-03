@@ -134,6 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-regex", default="", help="Only test model ids matching regex")
     parser.add_argument("--exclude-regex", default="", help="Skip model ids matching regex")
     parser.add_argument("--max-models", type=int, default=0, help="Limit number of models (0 = all)")
+    parser.add_argument("--models", default="", help="Comma-separated list of model IDs (bypasses /v1/models endpoint)")
     parser.add_argument("--delay-ms", type=int, default=0, help="Delay between requests")
     parser.add_argument("--top", type=int, default=20, help="Rows to print in leaderboard")
     parser.add_argument("--list-only", action="store_true", help="List models and exit")
@@ -275,7 +276,10 @@ def extract_model_ids(payload: Any) -> List[str]:
     return sorted(set([x for x in ids if x]))
 
 
-def fetch_models(base_url: str, headers: Dict[str, str], timeout: float, models_url_override: str = "") -> Tuple[List[str], str]:
+def fetch_models(base_url: str, headers: Dict[str, str], timeout: float, models_url_override: str = "", models_list: str = "") -> Tuple[List[str], str]:
+    if models_list:
+        ids = [m.strip() for m in models_list.split(",") if m.strip()]
+        return ids, "hardcoded_list"
     urls = [models_url_override] if models_url_override else endpoint_candidates(base_url, "/models")
     last_error = ""
     for url in urls:
@@ -426,7 +430,7 @@ def main() -> int:
     headers = build_headers(args, api_key)
 
     try:
-        models, models_url_used = fetch_models(args.base_url, headers, args.timeout, args.models_url)
+        models, models_url_used = fetch_models(args.base_url, headers, args.timeout, args.models_url, args.models)
     except Exception as exc:
         print(f"ERROR: failed to fetch model list: {exc}", file=sys.stderr)
         return 2
