@@ -1,7 +1,7 @@
 approaches: []
 branch_name: main
-created_at: '2026-02-18T23:03:46.066179Z'
-current_commit_hash: dc173c0
+created_at: '2026-02-18T22:36:40.888140Z'
+current_commit_hash: init
 dependencies: {}
 environment:
   node_version: v24.12.0
@@ -9,14 +9,7 @@ environment:
   python_version: Python 3.13.5
 file_structure:
   .GCC:
-  - AGENT_GUIDE.txt
   - main.md
-  - law-enforcer.json
-  - law-enforcer-trace.jsonl
-  - law-watchman-system.txt
-  - law-policy.txt
-  - law-runtime.json
-  - law-research-policy.txt
   - .current_branch
   - evolution.yaml
   opencontext:
@@ -27,27 +20,22 @@ file_structure:
   - LICENSE
   - MANIFEST.in
   root:
-  - PROJECT_BLUEPRINT.md
-  - HOOKS_AND_ENFORCEMENT.md
-  - README.md
   - install.sh
   - INSTALLATION.md
-  - AGENT_WORKFLOW.md
   - IMPLEMENTATION.md
   - SPEC.md
   - agent.txt
-  - DASHSCOPE_MIGRATION_SUMMARY.md
   scripts:
   - test-opencode-plugin-planning-guard.mjs
   - test-opencode-plugin-provider-config.mjs
   - test-opencode-plugin-research.mjs
   - test-opencode-plugin-watchman-malformed.mjs
-  - chutes_json_benchmark_20260303T134545Z.json
   - test-opencode-plugin.sh
-  - chutes_json_benchmark.py
   - test-opencode-plugin-trace.mjs
-  - test-opencontext-context-search.sh
   - test-opencode-plugin-watchman.mjs
+  - test-opencode-plugin-law.mjs
+  - test-opencode-watchman-trace-live.sh
+  - test-opencode-serve-plugin.sh
   templates: []
 performance_metrics: {}
 user_feedback: []

@@ -1,0 +1,37 @@
+approaches: []
+branch_name: main
+created_at: '2026-02-18T21:27:10.830224Z'
+current_commit_hash: init
+dependencies: {}
+environment:
+  node_version: v24.12.0
+  platform: Linux
+  python_version: Python 3.13.5
+file_structure:
+  .GCC:
+  - main.md
+  - .current_branch
+  - evolution.yaml
+  opencontext:
+  - .gitignore
+  - README.md
+  - TEST_RESULTS.md
+  - pyproject.toml
+  - LICENSE
+  - MANIFEST.in
+  root:
+  - install.sh
+  - INSTALLATION.md
+  - IMPLEMENTATION.md
+  - SPEC.md
+  scripts:
+  - test-opencode-plugin-research.mjs
+  - test-opencode-plugin.sh
+  - test-opencode-plugin-trace.mjs
+  - test-opencode-plugin-watchman.mjs
+  - test-opencode-plugin-law.mjs
+  - test-opencode-watchman-trace-live.sh
+  - test-opencode-serve-plugin.sh
+  templates: []
+performance_metrics: {}
+user_feedback: []

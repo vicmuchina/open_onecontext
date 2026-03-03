@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "mode": "interrupt_continue",
+  "cooldowns": {
+    "interruptionSeconds": 45,
+    "sameRuleSeconds": 120
+  },
+  "limits": {
+    "maxConsecutiveInjections": 4
+  },
+  "gcc": {
+    "requireInit": true,
+    "requireCheckpointEveryTools": 6,
+    "requireFailedAttemptLookup": true,
+    "compactionCheckpointRequired": true,
+    "skipCheckpointDuringPlanningAgent": true,
+    "countReadOnlyToolsForCheckpoint": false
+  },
+  "mcp": {
+    "requireAwarenessAtSessionStart": true,
+    "requireUseWhenRelevant": true,
+    "usageReminderEveryTools": 4
+  },
+  "research": {
+    "requireCaptureOnDocsOrGithub": true,
+    "docsKeywords": [
+      "docs",
+      "readme",
+      "documentation",
+      "arxiv.org"
+    ]
+  },
+  "critic": {
+    "enabled": true,
+    "provider": "openai_compatible",
+    "baseUrl": "https://llm.chutes.ai/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "model": "openai/gpt-oss-120b-TEE",
+    "apiKeyEnv": "CHUTES_API_KEY",
+    "modelEnv": "OPENCONTEXT_LAW_MODEL_ID",
+    "timeoutMs": 8000,
+    "maxTokensCritic": 120,
+    "maxTokensWatchman": 320,
+    "strictJsonRetryAttempts": 1
+  },
+  "watchman": {
+    "enabled": true,
+    "inspectAssistantTurns": true,
+    "inspectToolCalls": true,
+    "inspectCompaction": true,
+    "inspectOnIdle": true,
+    "skipDuringPlanningAgent": true,
+    "includeRecentMessages": 12,
+    "includeRecentToolCalls": 12
+  },
+  "observability": {
+    "traceEnabled": true,
+    "traceFile": "law-enforcer-trace.jsonl"
+  }
+}

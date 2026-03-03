@@ -1,7 +1,7 @@
 # Project: RLM
 
 ## Goal
-Run plugin testing and verify GCC-based tests are working correctly
+Development workspace
 
 ## Milestones
 - [ ] Initial setup

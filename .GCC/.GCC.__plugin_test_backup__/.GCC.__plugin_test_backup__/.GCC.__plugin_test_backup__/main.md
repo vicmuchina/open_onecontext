@@ -1,7 +1,7 @@
 # Project: RLM
 
 ## Goal
-Run plugin testing and verify GCC-based tests are working correctly
+Benchmark Chutes API models to test plugin system initialization before proceeding with no-GCC tests
 
 ## Milestones
 - [ ] Initial setup

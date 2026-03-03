@@ -1,7 +1,7 @@
-# Project: RLM
+# Project: OpenContext
 
 ## Goal
-Run plugin testing and verify GCC-based tests are working correctly
+Implementation of Git Context Controller (GCC) version control system for LLM agents with three-layer architecture and comprehensive context management operations.
 
 ## Milestones
 - [ ] Initial setup

@@ -1,7 +1,7 @@
-# Project: RLM
+# Project: open_onecontext
 
 ## Goal
-Run plugin testing and verify GCC-based tests are working correctly
+Plugin no-GCC test
 
 ## Milestones
 - [ ] Initial setup

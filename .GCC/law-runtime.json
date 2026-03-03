@@ -1,0 +1,20 @@
+{
+  "critic": {
+    "apiKey": "sk-sp-538c754005aa4fc08d2f82331479ac05",
+    "model": "qwen3-coder-next",
+    "modelFallbacks": [
+      "qwen3-coder-plus",
+      "kimi-k2.5",
+      "qwen3-max-2026-01-23"
+    ],
+    "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "Authorization",
+    "apiKeyPrefix": "Bearer",
+    "headers": {},
+    "request": {},
+    "apiKeyEnv": "DASHSCOPE_API_KEY",
+    "modelEnv": "",
+    "responseFormatStrategy": "json_schema_then_json_object"
+  }
+}
