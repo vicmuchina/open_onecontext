@@ -217,113 +217,571 @@ Full Config Key Map (edit in /home/vic/Projects/RLM/.GCC/law-enforcer.json)
   - includeInWatchmanPayload
 
 Operator Bootstrap Questions (ask before major work)
-- Which provider should watchman use? (Chutes / OpenAI / other OpenAI-compatible)
-- What base URL should be used? (example: https://llm.chutes.ai/v1)
-- Which API key env var should be used? (example: CHUTES_API_KEY / OPENAI_API_KEY)
+- Which provider should watchman use? (Chutes / DashScope / OpenAI / other OpenAI-compatible)
+- What base URL should be used? (example: https://coding-intl.dashscope.aliyuncs.com/v1)
+- Which API key env var should be used? (example: DASHSCOPE_API_KEY / CHUTES_API_KEY / OPENAI_API_KEY)
 - Should runtime config be project-local (/home/vic/Projects/RLM/.GCC/law-runtime.json) or global (/home/vic/.config/opencontext/law-runtime.json)?
 - Should we run model benchmark now and auto-write best model/fallbacks?
 - If answers are missing, ask first instead of guessing credentials/routes.
 
-Model Benchmark + Auto-Configure
-- Chutes example:
-  python3 scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --response-format json_object --top 15 --write-runtime .GCC/law-runtime.json
-- Generic OpenAI-compatible example:
-  python3 scripts/chutes_json_benchmark.py --base-url https://<provider>/v1 --api-key-env <ENV_VAR> --response-format json_object --max-models 20 --top 15 --write-runtime .GCC/law-runtime.json
-- Global runtime write (all projects):
-  python3 scripts/chutes_json_benchmark.py ... --write-runtime ~/.config/opencontext/law-runtime.json
-- Script behavior:
-  - discovers model IDs from provider model-list endpoint candidates (/models and /v1/models)
-  - benchmarks strict watchman-schema JSON compliance + latency + tokens/sec
-  - writes best model + fallback chain automatically when --write-runtime is set
+================================================================================
+PROVIDER SETUP GUIDE: DASHSCOPE CODING PLAN (Current Default)
+================================================================================
 
-Custom Rule Schema (JSON)
-- id (string, required): stable rule identifier.
-- enabled (bool): whether rule is active.
-- description (string): human intent.
-- severity (string): low|medium|high (advisory metadata).
-- triggers (array): assistant_turn, tool_call, compaction, idle.
-- when (object):
-  - taskKeywords: text keywords in command/output/message context.
-  - toolIncludes/toolExcludes: tool name filters.
-  - commandIncludes/commandRegex: command text filters.
-  - assistantIncludes/outputIncludes: textual context filters.
-  - debtFlags: pendingCompactionCheckpoint|pendingResearchCapture|pendingFailureLookup|hasViolationDebt|mcpUsed.
-- require (object):
-  - anyTools: at least one required tool should appear in recent/current tool usage.
-  - anyCommands: at least one required command string should appear.
-  - guidance: explicit corrective action text shown in reminders.
-- interruptAfterViolations (int, optional): per-rule hard interruption threshold.
+Current Configuration (as of March 3, 2026)
+- Provider: DashScope Coding Plan (Alibaba Cloud)
+- Base URL: https://coding-intl.dashscope.aliyuncs.com/v1
+- API Key Env: DASHSCOPE_API_KEY
+- Primary Model: qwen3-coder-next (selected for lowest latency: 2.8s)
+- Fallback Models: qwen3-coder-plus, kimi-k2.5, qwen3-max-2026-01-23
+- Plan: Lite Basic Plan (31 days, auto-renewal enabled)
 
-Escalation Behavior (custom.escalation)
-- mode:
-  - soft_then_hard: warn first, interrupt on repeated violations.
-  - hard_only: interrupt immediately.
-  - soft_only: warnings only.
-- softViolationsBeforeInterrupt: number of soft reminders before hard mode.
-- hardInterruptThreshold: default hard threshold if rule override is absent.
-- reminderCooldownSeconds: minimum interval between reminders for same rule.
-- resetOnCommit: clear rule counters after successful opencontext commit.
+Setup Instructions
 
-Planning Guard
-- To avoid noisy interruptions during plan phases:
-  - gcc.skipCheckpointDuringPlanningAgent = true
-  - watchman.skipDuringPlanningAgent = true
-  - custom.exemptAgentPatterns includes "plan"/"planner" by default
+Step 1: Set API Key (choose one method)
 
-Recommended Policy Authoring Style (/home/vic/Projects/RLM/.GCC/law-policy.txt)
-- The file already contains an active balanced baseline policy.
-- Start by tweaking existing rules instead of rewriting from scratch.
-- Use short, testable rules.
-- Prefer explicit "when X, do Y" format.
-- Mention exact tool/skill/command names.
-- Example:
-  - If task needs long-running process (dev/watch/repl), use PTY/background tooling (pty_spawn) instead of blocking bash.
-  - If a relevant MCP server is available, use it before generic web search.
-  - Capture major docs/GitHub findings with opencontext commit.
-  - Before retrying after failure, consult opencontext context --search/--log.
+Method A: Environment Variable (recommended for security)
+```bash
+export DASHSCOPE_API_KEY="sk-sp-538c754005aa4fc08d2f82331479ac05"
+```
 
-Standard Daily Workflow
-- opencontext init --project-name "<name>" --goal "<goal>"
-- opencontext init --project-name "<name>" --goal-file SPEC.md
-- opencontext law init
-- opencontext law validate
-- opencontext law status
-- opencontext law watch -n 20
-- opencode (or opencode serve --print-logs --log-level DEBUG)
-- opencontext commit "<summary>" at meaningful checkpoints
-- opencontext context --search "<failure/topic>" before retry loops
-- opencontext context --log --lines 80 after compaction or handoff
+Method B: Runtime Config File (convenient, no repeated exports)
+- Project-local: /home/vic/Projects/RLM/.GCC/law-runtime.json
+- Global: ~/.config/opencontext/law-runtime.json
 
-Quick Debug Workflow
-- Check plugin/service logs:
-  opencode --print-logs --log-level DEBUG run "plugin smoke test"
-- Check trace evidence:
-  opencontext io
-  opencontext law watch -n 20
-  opencontext law watch --follow
-- Validate config:
-  opencontext law validate
-- Show active settings:
-  opencontext law status
-- Run full health check:
-  opencontext law doctor
+Example runtime config:
+```json
+{
+  "critic": {
+    "apiKey": "sk-sp-538c754005aa4fc08d2f82331479ac05",
+    "model": "qwen3-coder-next",
+    "modelFallbacks": ["qwen3-coder-plus", "kimi-k2.5", "qwen3-max-2026-01-23"],
+    "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "Authorization",
+    "apiKeyPrefix": "Bearer",
+    "responseFormatStrategy": "json_schema_then_json_object"
+  }
+}
+```
 
-Common Misconfigurations
-- Wrong apiKeyEnv value (env var missing at runtime).
-- endpointPath does not match provider API route.
-- Model returns non-JSON despite schema request.
-- Rule conditions too broad causing excessive reminders.
-- Policy mentions tools that are not installed.
+Step 2: Verify Configuration
+```bash
+opencontext law validate
+opencontext law status
+```
 
-Installation and Repair
-- One command install:
-  curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash
-- Local project install:
-  curl -fsSL https://raw.githubusercontent.com/vicmuchina/open_onecontext/main/install.sh | bash -s -- --local --project-dir <project_path>
-- Repair project integration:
-  opencontext setup-opencode
-  opencontext law init
-  opencontext law guide
+Expected output should show:
+- Critic model: qwen3-coder-next
+- Critic endpoint: https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions
+- Law file is valid
 
-Regenerate This Guide
-- Run: opencontext law guide
+Step 3: Test API Connectivity (optional)
+```bash
+export DASHSCOPE_API_KEY="sk-sp-538c754005aa4fc08d2f82331479ac05"
+curl -s -X POST "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions" \
+  -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3-coder-next","messages":[{"role":"user","content":"Hello"}]}' | python3 -m json.tool
+```
+
+Available Models on DashScope Coding Plan
+
+| Model | Capabilities | Latency | Recommended For |
+|-------|-------------|---------|-----------------|
+| qwen3.5-plus | Text, Deep Thinking, Visual | 18.9s | High-throughput batch tasks |
+| qwen3-max-2026-01-23 | Text, Deep Thinking | 4.3s | Complex reasoning |
+| qwen3-coder-next | Text Generation | 2.8s | Law Enforcer (PRIMARY) |
+| qwen3-coder-plus | Text Generation | 3.5s | Fallback #1 |
+| glm-5 | Text, Deep Thinking | 16.0s | Alternative reasoning |
+| glm-4.7 | Text, Deep Thinking | 14.1s | Alternative reasoning |
+| kimi-k2.5 | Text, Deep Thinking, Visual | 5.0s | Fallback #2 |
+| MiniMax-M2.5 | Text, Deep Thinking | 10.1s | NOT recommended (67% schema) |
+
+Model Selection Rationale
+- qwen3-coder-next selected as PRIMARY for Law Enforcer watchman duties
+- Critical metric: LOWEST LATENCY (2.8s) for fast interruptions
+- 100% JSON schema compliance required for structured watchman output
+- MiniMax-M2.5 excluded from fallbacks due to 67% schema compliance
+
+================================================================================
+MODEL BENCHMARK SCRIPT (Enhanced)
+================================================================================
+
+Purpose
+- Benchmark OpenAI-compatible models for strict JSON output reliability + speed
+- Originally built for Chutes, works with any OpenAI-compatible provider
+- Auto-selects best model + fallbacks and writes to runtime config
+
+Usage
+
+Basic Benchmark (auto-discover models from /v1/models endpoint)
+```bash
+export PROVIDER_API_KEY="your_api_key"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://<provider>/v1 \
+  --api-key-env PROVIDER_API_KEY \
+  --response-format json_object \
+  --top 10
+```
+
+Hardcoded Model List (for providers without /v1/models endpoint)
+```bash
+export DASHSCOPE_API_KEY="sk-sp-538c754005aa4fc08d2f82331479ac05"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://coding-intl.dashscope.aliyuncs.com/v1 \
+  --api-key-env DASHSCOPE_API_KEY \
+  --models "qwen3.5-plus,qwen3-coder-next,qwen3-coder-plus" \
+  --response-format json_object \
+  --top 3
+```
+
+Auto-Configure Runtime (writes best model to law-runtime.json)
+```bash
+# Project-local
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://coding-intl.dashscope.aliyuncs.com/v1 \
+  --api-key-env DASHSCOPE_API_KEY \
+  --models "qwen3.5-plus,qwen3-max-2026-01-23,qwen3-coder-next,qwen3-coder-plus,glm-5,glm-4.7,kimi-k2.5,MiniMax-M2.5" \
+  --response-format json_object \
+  --top 8 \
+  --write-runtime .GCC/law-runtime.json
+
+# Global (all projects)
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://coding-intl.dashscope.aliyuncs.com/v1 \
+  --api-key-env DASHSCOPE_API_KEY \
+  --models "qwen3.5-plus,qwen3-coder-next,qwen3-coder-plus" \
+  --response-format json_object \
+  --top 3 \
+  --write-runtime ~/.config/opencontext/law-runtime.json
+```
+
+Include API Key in Runtime File (avoid repeated env exports)
+```bash
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://coding-intl.dashscope.aliyuncs.com/v1 \
+  --api-key-env DASHSCOPE_API_KEY \
+  --models "qwen3-coder-next,qwen3-coder-plus,kimi-k2.5" \
+  --response-format json_object \
+  --top 3 \
+  --write-runtime .GCC/law-runtime.json \
+  --include-api-key
+```
+
+All Available Flags
+
+Provider Configuration:
+  --base-url BASE_URL           Provider base URL (default: https://llm.chutes.ai/v1)
+  --models-url MODELS_URL       Override model-list endpoint URL
+  --chat-url CHAT_URL           Override chat-completions endpoint URL
+  --provider-name NAME          Label only (report metadata)
+
+Authentication:
+  --api-key-env ENV_VAR         Env var name for API key (default: CHUTES_API_KEY)
+  --api-key KEY                 Explicit API key (overrides env)
+  --auth-header HEADER          Auth header name (default: Authorization)
+  --api-key-prefix PREFIX       Auth prefix (default: Bearer, empty for raw key)
+  --extra-header KEY=VALUE      Additional header (repeatable)
+
+Model Selection:
+  --models LIST                 Comma-separated model IDs (bypasses /v1/models)
+  --max-models N                Limit number of models (0 = all)
+  --include-regex REGEX         Only test model ids matching regex
+  --exclude-regex REGEX         Skip model ids matching regex
+
+Benchmark Configuration:
+  --response-format FORMAT      json_object or json_schema (default: json_object)
+  --max-tokens N                Max completion tokens per case (default: 140)
+  --timeout SECONDS             HTTP timeout seconds (default: 45.0)
+  --delay-ms N                  Delay between requests (default: 0)
+
+Output:
+  --top N                       Rows to print in leaderboard (default: 20)
+  --output PATH                 Output JSON file path
+  --list-only                   List models and exit (no benchmark)
+
+Runtime Config:
+  --write-runtime PATH          Write best model + fallbacks (repeatable)
+  --fallback-count N            How many fallback models to write (default: 3)
+  --include-api-key             Also persist API key into runtime file
+
+Examples by Provider
+
+Chutes AI:
+```bash
+export CHUTES_API_KEY="your_key"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://llm.chutes.ai/v1 \
+  --api-key-env CHUTES_API_KEY \
+  --response-format json_object \
+  --top 15 \
+  --write-runtime .GCC/law-runtime.json
+```
+
+OpenAI:
+```bash
+export OPENAI_API_KEY="your_key"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://api.openai.com/v1 \
+  --api-key-env OPENAI_API_KEY \
+  --response-format json_object \
+  --top 10 \
+  --write-runtime .GCC/law-runtime.json
+```
+
+DashScope (Hardcoded Models):
+```bash
+export DASHSCOPE_API_KEY="your_key"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://coding-intl.dashscope.aliyuncs.com/v1 \
+  --api-key-env DASHSCOPE_API_KEY \
+  --models "qwen3.5-plus,qwen3-coder-next,qwen3-coder-plus,kimi-k2.5" \
+  --response-format json_object \
+  --top 4 \
+  --write-runtime .GCC/law-runtime.json
+```
+
+Any OpenAI-Compatible Provider:
+```bash
+export PROVIDER_API_KEY="your_key"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://<provider-host>/v1 \
+  --api-key-env PROVIDER_API_KEY \
+  --models "model-1,model-2,model-3" \
+  --response-format json_object \
+  --top 3
+```
+
+Benchmark Output
+
+Console Leaderboard:
+```
+=== Leaderboard ===
+Rank  Model                                               Schema  JSON    TPS     Lat(ms)
+----  --------------------------------------------------  ------  ------  ------  -------
+   1  qwen3-coder-next                                    1.00    1.00     42.44  2840.72
+   2  qwen3-coder-plus                                    1.00    1.00     19.61  3533.31
+   3  kimi-k2.5                                           1.00    1.00     24.12  4973.60
+```
+
+JSON Report (saved to scripts/chutes_json_benchmark_<timestamp>.json):
+- started_at, finished_at
+- provider_name, base_url, models_url_used
+- response_format, tasks, models_tested
+- results: array of model metrics (schema rate, JSON rate, TPS, latency)
+
+Runtime Config (if --write-runtime used):
+- Automatically writes best model + fallbacks to specified file
+- Includes baseUrl, endpointPath, auth configuration
+- Optional API key persistence with --include-api-key
+
+================================================================================
+PROVIDER SWITCHING GUIDE
+================================================================================
+
+Switching from DashScope to Another Provider
+
+Step 1: Update law-enforcer.json
+```json
+{
+  "critic": {
+    "baseUrl": "https://new-provider.com/v1",
+    "endpointPath": "/chat/completions",
+    "authHeader": "Authorization",
+    "apiKeyPrefix": "Bearer",
+    "model": "new-model-name",
+    "modelFallbacks": ["fallback-1", "fallback-2"],
+    "apiKeyEnv": "NEW_PROVIDER_API_KEY"
+  }
+}
+```
+
+Step 2: Update or Remove Runtime Config
+- Edit .GCC/law-runtime.json to match new provider
+- Or delete to rely on environment variables only
+
+Step 3: Run Benchmark for New Provider
+```bash
+export NEW_PROVIDER_API_KEY="your_key"
+python3 scripts/chutes_json_benchmark.py \
+  --base-url https://new-provider.com/v1 \
+  --api-key-env NEW_PROVIDER_API_KEY \
+  --response-format json_object \
+  --top 5 \
+  --write-runtime .GCC/law-runtime.json
+```
+
+Step 4: Validate
+```bash
+opencontext law validate
+opencontext law status
+```
+
+Switching from Chutes to DashScope (Reference: What Was Done)
+
+1. Updated .GCC/law-enforcer.json:
+   - critic.baseUrl: https://coding-intl.dashscope.aliyuncs.com/v1
+   - critic.apiKeyEnv: DASHSCOPE_API_KEY
+   - critic.model: qwen3-coder-next
+   - critic.modelFallbacks: [qwen3-coder-plus, kimi-k2.5, qwen3-max-2026-01-23]
+   - critic.timeoutMs: 15000 (increased for slower models)
+
+2. Created .GCC/law-runtime.json:
+   - Persisted API key for convenience
+   - Same model configuration
+
+3. Ran benchmark:
+   - Tested all 8 available models
+   - Selected qwen3-coder-next for lowest latency (2.8s)
+
+4. Updated documentation:
+   - This AGENT_GUIDE.txt
+   - DASHSCOPE_MIGRATION_SUMMARY.md
+
+================================================================================
+ALTERNATIVE PROVIDERS (Quick Reference)
+================================================================================
+
+Chutes AI
+- Base URL: https://llm.chutes.ai/v1
+- Models: 100+ open-source models (Mistral, Llama, Qwen, etc.)
+- Auth: Bearer token
+- Env Var: CHUTES_API_KEY
+- Benchmark: python3 scripts/chutes_json_benchmark.py --base-url https://llm.chutes.ai/v1 --api-key-env CHUTES_API_KEY --top 15
+
+OpenAI
+- Base URL: https://api.openai.com/v1
+- Models: gpt-4o, gpt-4-turbo, gpt-3.5-turbo, o1, etc.
+- Auth: Bearer token
+- Env Var: OPENAI_API_KEY
+- Benchmark: python3 scripts/chutes_json_benchmark.py --base-url https://api.openai.com/v1 --api-key-env OPENAI_API_KEY --top 5
+
+Together AI
+- Base URL: https://api.together.xyz/v1
+- Models: Llama, Qwen, Mistral, etc.
+- Auth: Bearer token
+- Env Var: TOGETHER_API_KEY
+
+Groq
+- Base URL: https://api.groq.com/openai/v1
+- Models: Llama, Mixtral (ultra-fast inference)
+- Auth: Bearer token
+- Env Var: GROQ_API_KEY
+
+Anyscale
+- Base URL: https://api.endpoints.anyscale.com/v1
+- Models: Llama, Mistral, etc.
+- Auth: Bearer token
+- Env Var: ANYSCALE_API_KEY
+
+Custom vLLM Deployment
+- Base URL: http://localhost:8000/v1 (or your server)
+- Models: Any model served by vLLM
+- Auth: Optional (Bearer token if configured)
+- Benchmark: python3 scripts/chutes_json_benchmark.py --base-url http://localhost:8000/v1 --models "model-name" --top 1
+
+================================================================================
+TROUBLESHOOTING PROVIDER ISSUES
+================================================================================
+
+Problem: HTTP 404 on /v1/models
+Cause: Provider doesn't expose model list endpoint (e.g., DashScope)
+Solution: Use --models flag with hardcoded model list
+
+Problem: HTTP 401 Unauthorized
+Cause: Invalid or missing API key
+Solution: 
+- Verify env var: echo $DASHSCOPE_API_KEY
+- Check runtime config: cat .GCC/law-runtime.json
+- Ensure apiKeyEnv matches actual env var name
+
+Problem: HTTP 404 on /v1/chat/completions
+Cause: Wrong endpoint path
+Solution:
+- Try --chat-url override
+- Check provider docs for correct endpoint
+- Some providers use /chat/completions, others use /completions
+
+Problem: Model returns non-JSON output
+Cause: Model doesn't support response_format parameter
+Solution:
+- Use --response-format json_object (more widely supported)
+- Try different model (some models don't support structured output)
+- Check provider documentation for JSON mode support
+
+Problem: High latency (>10s)
+Cause: Slow model or network issues
+Solution:
+- Run benchmark to find faster models
+- Increase critic.timeoutMs in law-enforcer.json
+- Consider switching to faster provider (e.g., Groq for Llama models)
+
+Problem: Schema compliance <100%
+Cause: Model struggles with strict JSON schema
+Solution:
+- Use simpler models designed for code generation
+- Try --response-format json_object instead of json_schema
+- Exclude problematic models from fallbacks
+
+================================================================================
+CUSTOM RULE EXAMPLES (DashScope-Specific)
+================================================================================
+
+Example 1: Enforce qwen3-coder-next for Watchman Tasks
+```json
+{
+  "custom": {
+    "rules": [
+      {
+        "id": "use_fast_model_for_watchman",
+        "enabled": true,
+        "description": "Ensure watchman uses low-latency model",
+        "severity": "high",
+        "triggers": ["assistant_turn"],
+        "when": {
+          "taskKeywords": ["law enforcer", "watchman", "policy violation"]
+        },
+        "require": {
+          "guidance": "Watchman inspections should use qwen3-coder-next for fast response times."
+        }
+      }
+    ]
+  }
+}
+```
+
+Example 2: Require Benchmark Before Model Changes
+```json
+{
+  "custom": {
+    "rules": [
+      {
+        "id": "benchmark_before_model_switch",
+        "enabled": true,
+        "description": "Always benchmark models before changing watchman config",
+        "severity": "medium",
+        "triggers": ["tool_call"],
+        "when": {
+          "commandIncludes": ["law-enforcer.json", "law-runtime.json"]
+        },
+        "require": {
+          "guidance": "Before changing model config, run: python3 scripts/chutes_json_benchmark.py --models ... --top 3"
+        }
+      }
+    ]
+  }
+}
+```
+
+================================================================================
+QUICK REFERENCE COMMANDS
+================================================================================
+
+Setup & Validation:
+- opencontext law init              - Initialize law configuration
+- opencontext law validate          - Validate law config syntax
+- opencontext law status            - Show active configuration
+- opencontext law doctor            - Full health check
+- opencontext law guide             - Regenerate this guide
+
+Benchmarking:
+- python3 scripts/chutes_json_benchmark.py --help
+- python3 scripts/chutes_json_benchmark.py --models "model1,model2" --top 2
+- python3 scripts/chutes_json_benchmark.py --write-runtime .GCC/law-runtime.json
+
+Runtime Monitoring:
+- opencontext io                    - Live watchman I/O stream
+- opencontext law watch -n 20       - Last 20 trace entries
+- opencontext law watch --follow    - Follow live trace updates
+- cat .GCC/law-enforcer-trace.jsonl - Raw trace log
+
+Configuration:
+- cat .GCC/law-enforcer.json        - Machine-readable config
+- cat .GCC/law-policy.txt           - Natural-language policy
+- cat .GCC/law-runtime.json         - Project runtime overrides
+- cat ~/.config/opencontext/law-runtime.json - Global runtime overrides
+
+================================================================================
+DAILY WORKFLOW (With DashScope)
+================================================================================
+
+1. Start Session (API key already in runtime config, no export needed):
+```bash
+opencode
+```
+
+2. Or with environment variable:
+```bash
+export DASHSCOPE_API_KEY="sk-sp-538c754005aa4fc08d2f82331479ac05"
+opencode
+```
+
+3. Work normally - Law Enforcer will use qwen3-coder-next for watchman inspections
+
+4. If Law Enforcer interrupts:
+   - Read the correction prompt
+   - Satisfy the required action (e.g., opencontext commit)
+   - Continue work
+
+5. Check trace if needed:
+```bash
+opencontext io
+opencontext context --log --lines 80
+```
+
+6. End session with checkpoint:
+```bash
+opencontext commit -m "Summary of work completed"
+```
+
+================================================================================
+SECURITY NOTES
+================================================================================
+
+API Key Security:
+- Never commit API keys to git (ensure .GCC/law-runtime.json is in .gitignore if it contains keys)
+- Prefer environment variables over file-based keys in production
+- Rotate keys periodically via DashScope console
+- Use project-local runtime config for team sharing (with key redacted)
+
+Runtime Config Precedence:
+1. Environment variables (highest priority)
+2. Project runtime config (.GCC/law-runtime.json)
+3. Global runtime config (~/.config/opencontext/law-runtime.json)
+4. law-enforcer.json defaults (lowest priority)
+
+This means you can:
+- Store non-sensitive config in runtime files
+- Keep API keys in environment variables
+- Override models per-project without changing law-enforcer.json
+
+================================================================================
+REGENERATE THIS GUIDE
+================================================================================
+
+After making configuration changes, regenerate this guide:
+```bash
+opencontext law guide
+```
+
+This ensures the guide reflects current:
+- Provider configuration
+- Model selections
+- Custom rules
+- Policy files
+- Runtime overrides
+
+================================================================================
+DOCUMENTATION FILES
+================================================================================
+
+- DASHSCOPE_MIGRATION_SUMMARY.md - Full migration documentation (March 2026)
+- scripts/chutes_json_benchmark_*.json - Historical benchmark results
+- .GCC/law-enforcer-trace.jsonl - Runtime watchman request/response evidence
+- opencontext/README.md - Full OpenContext user guide
+- SPEC.md - Technical specification
+- PROJECT_BLUEPRINT.md - Project goals and architecture
+- AGENT_WORKFLOW.md - Day-to-day operational runbook
+
+(End of file)
