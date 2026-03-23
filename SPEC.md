@@ -901,3 +901,53 @@ Per the GCC paper:
 ## License
 
 MIT License - See LICENSE file
+
+---
+
+## Enhanced Commit Metadata (v2.1)
+
+### Purpose
+
+To make GCC memory more searchable and useful for future sessions, commits now support enhanced metadata fields.
+
+### New Commit Fields
+
+When creating commits after fixing issues, use these optional fields:
+
+- **Keywords** (`--keywords`, `-k`): Comma-separated searchable terms
+- **Error Fixed** (`--error-fixed`, `-e`): The specific error message that was resolved  
+- **Solution** (`--solution`): Brief description of how the fix works
+
+### Example Usage
+
+```bash
+opencontext commit -m "Fixed proxy streaming error" \\
+  -k "streaming, proxy, SSE, OutputTextDelta" \\
+  -e "OutputTextDelta without active item" \\
+  --solution "Don't increment itemIndex for thinking blocks, only text blocks"
+```
+
+### Commit Output Format
+
+Enhanced commits appear in `.GCC/branches/main/commit.md` with additional fields:
+
+```markdown
+### abc1234 - 2026-03-23T18:00:00Z
+**Summary:** Fixed proxy streaming error
+**Files Modified:** (see git diff)
+**Description:** Fixed proxy streaming error
+**Approach:** N/A
+**Status:** active
+**Performance:** N/A
+**Keywords:** streaming, proxy, SSE, OutputTextDelta
+**Error Fixed:** OutputTextDelta without active item
+**Solution:** Don't increment itemIndex for thinking blocks
+```
+
+### Watchman Changes (v2.1)
+
+1. **100% Confidence Requirement**: `minConfidence` is now 1.0 - watchman only interrupts when absolutely certain
+2. **File Path Suggestions**: Memory assistance provides direct file paths (`Read .GCC/branches/main/commit.md`)
+3. **Global GCC Fallback**: Searches `~/.GCC` if no results in project `.GCC`
+4. **Reduced Interruptions**: Much less frequent interruptions, only for true violations
+

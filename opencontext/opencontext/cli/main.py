@@ -103,6 +103,9 @@ def init(project_name: Optional[str], goal: Optional[str], goal_file: Optional[P
               help='Status of the approach')
 @click.option('--reason', '-r', help='Reason for status (especially abandoned)')
 @click.option('--performance', '-p', help='Performance notes')
+@click.option('--keywords', '-k', help='Searchable keywords for this commit (comma-separated)')
+@click.option('--error-fixed', '-e', help='Specific error message that was fixed (if applicable)')
+@click.option('--solution', help='Brief description of the fix/solution')
 def commit(
     summary: Optional[str],
     message: Optional[str],
@@ -110,6 +113,9 @@ def commit(
     status: str,
     reason: Optional[str],
     performance: Optional[str],
+    keywords: Optional[str],
+    error_fixed: Optional[str],
+    solution: Optional[str],
 ):
     """Create a checkpoint commit.
     
@@ -139,6 +145,9 @@ def commit(
             status=status,
             reason=reason,
             performance=performance,
+            keywords=keywords,
+            error_fixed=error_fixed,
+            solution=solution,
         )
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")

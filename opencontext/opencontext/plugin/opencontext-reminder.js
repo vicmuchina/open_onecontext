@@ -31,6 +31,52 @@ const CONFIG = {
   maxSnippetChars: 1200,
 };
 
+// Success detection patterns for auto-commit suggestions
+const SUCCESS_PATTERNS = [
+  /tests?\s*(passed|succeeded|ok|✓)/i,
+  /\d+\s*(passed|succeeding)/i,
+  /✓\s*(passed|success|done|completed)/i,
+  /server\s*(started|running|listening)/i,
+  /successfully\s*(built|compiled|deployed|started)/i,
+  /build\s*(succeeded|passed|completed)/i,
+  /all\s*tests\s*pass/i,
+  /0\s*(failed|errors?|failing)/i,
+  /error[s]?\s*:\s*0/i,
+  /fixed\s*:/i,
+  /resolved\s*:/i,
+];
+
+const FAILURE_PATTERNS = [
+  /error[s]?\s*:/i,
+  /failed\s*:/i,
+  /exception/i,
+  /traceback/i,
+  /fatal/i,
+  /cannot\s*(find|read|write|open|connect)/i,
+];
+
+function detectSuccessFromOutput(output) {
+  if (!output || typeof output !== "string") return { success: false, reason: "" };
+  const outputLower = output.toLowerCase();
+  
+  // Check for failure patterns first
+  for (const pattern of FAILURE_PATTERNS) {
+    if (pattern.test(output)) {
+      return { success: false, reason: "failure_pattern_detected" };
+    }
+  }
+  
+  // Check for success patterns
+  for (const pattern of SUCCESS_PATTERNS) {
+    const match = output.match(pattern);
+    if (match) {
+      return { success: true, reason: match[0] };
+    }
+  }
+  
+  return { success: false, reason: "no_pattern" };
+}
+
 const DEFAULT_LAW = {
   version: 1,
   mode: "interrupt_continue",
@@ -100,7 +146,7 @@ const DEFAULT_LAW = {
     inspectOnIdle: false,
     skipDuringPlanningAgent: true,
     dedupeSameViolationUntilResolved: true,
-    minConfidence: 0.75,
+    minConfidence: 1.0,  // Changed from 0.75 - only interrupt when 100% confident
     requireModelDecision: true,
     systemPromptFile: "law-watchman-system.txt",
     includeRecentMessages: 12,
@@ -248,6 +294,8 @@ const WATCHMAN_RESPONSE_SCHEMA = {
                 type: "array",
                 items: { type: "string" },
               },
+              commit_hash: { type: "string" },
+              keywords: { type: "string" },
             },
           },
         },
@@ -483,6 +531,39 @@ function findSemanticHistoryMatches(queryText, blocks, limit = 5) {
 
 function collectGccHistoryEvidence(directory, queryText = "") {
   const gccDir = join(directory, CONFIG.gccDir);
+  const globalGccDir = join(homedir(), ".GCC");
+  
+  // Collect from project GCC first
+  const projectResult = collectSingleGccEvidence(gccDir, "project", queryText);
+  
+  // Collect from global GCC as fallback
+  const globalResult = existsSync(globalGccDir) 
+    ? collectSingleGccEvidence(globalGccDir, "global", queryText)
+    : null;
+  
+  // If project has no results but global does, use global
+  if (!projectResult.available && globalResult?.available) {
+    return { ...globalResult, source: "global_fallback" };
+  }
+  
+  // If both have results, merge semantic matches (project first, then global)
+  if (projectResult.available && globalResult?.available) {
+    const projectMatches = projectResult.semanticMatches || [];
+    const globalMatches = (globalResult.semanticMatches || []).map(m => ({
+      ...m,
+      source: `global/${m.source}`,
+    }));
+    return {
+      ...projectResult,
+      semanticMatches: [...projectMatches, ...globalMatches.slice(0, 3)],
+      globalAvailable: true,
+    };
+  }
+  
+  return projectResult;
+}
+
+function collectSingleGccEvidence(gccDir, scope, queryText = "") {
   if (!existsSync(gccDir)) {
     return {
       available: false,
@@ -1332,17 +1413,22 @@ function defaultWatchmanSystemPrompt() {
     "Return STRICT JSON only (no prose/markdown) matching schema fields exactly.",
     "You may return debt_updates to open/clear/keep checkpoint and compaction debt.",
     "You may return assist suggestions when prior GCC memory can help the current task.",
-    "Critical behavior:",
+    "CRITICAL: Interruption requires 100% confidence (confidence=1.0).",
+    "- Only set violation=true with confidence=1.0 when you are absolutely certain.",
+    "- If you have ANY doubt, set violation=false and confidence < 1.0.",
+    "- Interruption is very expensive; err on the side of NOT interrupting.",
+    "When suggesting memory assistance:",
+    "- Provide specific commit hashes and file paths for the agent to read.",
+    "- Include keywords from the commit that will help the agent find relevant solutions.",
+    "- Tell the agent to use its own file reading tools to explore .GCC/ memory.",
+    "- Never suggest running opencontext CLI commands - the agent should read files directly.",
+    "Other behavior:",
     "- Do not request duplicate interruption for the exact same unresolved violation without new evidence.",
-    "- Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied before alerting again.",
+    "- Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied.",
     "- For failed-attempt workflow, only flag violations for actionable implementation retries.",
-    "- Treat pure environment/setup/CLI-usage noise as non-actionable unless policy explicitly says otherwise.",
-    "- Interrupt only when there is a clear immediate corrective action the agent can perform.",
-    "- Do not interrupt read-only discovery/exploration (listing files, reading docs, checking help/usage) unless policy explicitly marks it actionable.",
-    "- Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient setup/network/dependency noise) unless repeated behavior clearly blocks implementation.",
-    "- Interruption is expensive; if evidence is ambiguous, prefer violation=false and lower confidence.",
-    "- For non-critical workflow issues, prefer persistent/repeated signals before interrupting.",
-    "- If high-confidence prior memory can help now, prefer assist.should_suggest=true while keeping violation=false.",
+    "- Treat pure environment/setup/CLI-usage noise as non-actionable.",
+    "- Do not interrupt read-only discovery/exploration.",
+    "- Do not interrupt harmless command mistakes unless repeated behavior clearly blocks implementation.",
     "- Memory assistance is suggestion-only unless there is a true workflow-law violation.",
   ].join("\n");
 }
@@ -3194,6 +3280,8 @@ function normalizeAssistSuggestion(raw) {
     action: clipText(item.action || "", 220),
     command: clipText(item.command || "", 180),
     memoryRefs: refs,
+    commitHash: clipText(item.commit_hash || "", 20),
+    keywords: clipText(item.keywords || "", 200),
   };
 }
 
@@ -3859,10 +3947,10 @@ function applyWatchmanDebtUpdates(state, debtUpdates, ruleName = "") {
   recomputeViolationDebt(state);
 }
 
-function buildMemoryAssistPrompt(assist) {
+function buildMemoryAssistPrompt(assist, directory = "") {
   const suggestions = Array.isArray(assist?.suggestions) ? assist.suggestions : [];
   const lines = [
-    "OpenContext Memory Assist (suggestion only):",
+    "OpenContext Memory Assist:",
   ];
   if (assist?.reason) {
     lines.push(`Reason: ${assist.reason}`);
@@ -3871,14 +3959,24 @@ function buildMemoryAssistPrompt(assist) {
     lines.push("");
     lines.push(`${index + 1}. ${item.title || "Relevant prior memory"}`);
     if (item.whyNow) lines.push(`Why now: ${item.whyNow}`);
-    if (item.action) lines.push(`Suggested action: ${item.action}`);
-    if (item.command) lines.push(`Command hint: ${item.command}`);
+    if (item.action) lines.push(`Action: ${item.action}`);
+    // Provide direct file paths for agent to read using its own tools
     if (Array.isArray(item.memoryRefs) && item.memoryRefs.length > 0) {
-      lines.push(`Memory refs: ${item.memoryRefs.join(", ")}`);
+      const gccBase = directory ? `${directory}/.GCC` : ".GCC";
+      lines.push(`GCC files to read:`);
+      for (const ref of item.memoryRefs) {
+        lines.push(`  - ${gccBase}/${ref}`);
+      }
+    }
+    if (item.commitHash) {
+      lines.push(`Look for commit: ${item.commitHash}`);
+    }
+    if (item.keywords) {
+      lines.push(`Search keywords: ${item.keywords}`);
     }
   }
   lines.push("");
-  lines.push("Use these only if they fit the current task.");
+  lines.push("Use your file reading tools to explore GCC memory for relevant context.");
   return lines.join("\n");
 }
 
@@ -4201,6 +4299,42 @@ function buildModelDebtCandidates({ law, state, trigger, hasGCC }) {
   }
 
   return candidates;
+}
+
+async function suggestEnhancedCommit({ client, directory, state, toolOutput, commandText }) {
+  // This function prompts the agent to commit with enhanced metadata after a successful operation
+  // The watchman will judge if this is appropriate based on LLM analysis
+  if (!state || state.lastCommitPromptAt) {
+    // Cooldown to avoid repeated prompts
+    const lastPrompt = state.lastCommitPromptAt || 0;
+    if (Date.now() - lastPrompt < 60000) return false; // 1 minute cooldown
+  }
+  
+  // Only suggest if there's been meaningful work
+  if (state.toolExecutionCount < 3) return false;
+  
+  const prompt = [
+    "OpenContext Checkpoint Suggestion:",
+    "",
+    "A successful operation was detected. Consider creating a checkpoint with enhanced metadata:",
+    "",
+    "Run: opencontext commit -m \"<summary>\" --keywords \"<searchable terms>\" --error-fixed \"<error if fixed>\" --solution \"<how it was solved>\"",
+    "",
+    "Example:",
+    "  opencontext commit -m \"Fixed proxy streaming error\" -k \"streaming, proxy, SSE\" -e \"OutputTextDelta without active item\" --solution \"Don't increment itemIndex for thinking blocks\"",
+    "",
+    "This helps future sessions find similar solutions.",
+  ].join("\n");
+  
+  state.lastCommitPromptAt = Date.now();
+  await appendLawTrace(client, directory, {}, {
+    type: "success_commit_prompt",
+    sessionId: state.sessionId,
+    toolOutput: clipText(toolOutput, 500),
+    commandText: clipText(commandText, 200),
+  });
+  
+  return prompt;
 }
 
 async function evaluateAndEnforce({

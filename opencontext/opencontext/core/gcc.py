@@ -324,6 +324,9 @@ Branch created. No previous progress.
         status: str = "active",
         reason: Optional[str] = None,
         performance: Optional[str] = None,
+        keywords: Optional[str] = None,
+        error_fixed: Optional[str] = None,
+        solution: Optional[str] = None,
     ) -> str:
         """Create a checkpoint commit.
         
@@ -333,6 +336,9 @@ Branch created. No previous progress.
             status: Status of the approach (active, abandoned, merged).
             reason: Reason for status (especially for abandoned).
             performance: Performance notes.
+            keywords: Searchable keywords for this commit (comma-separated).
+            error_fixed: Specific error message that was fixed (if applicable).
+            solution: Brief description of the fix/solution.
             
         Returns:
             The commit hash.
@@ -352,6 +358,11 @@ Branch created. No previous progress.
         existing_content = commit_file.read_text() if commit_file.exists() else ""
         
         # Extract previous progress summary (simplified)
+        # Build optional enhanced metadata lines
+        keywords_line = f"\n**Keywords:** {keywords}" if keywords else ""
+        error_fixed_line = f"\n**Error Fixed:** {error_fixed}" if error_fixed else ""
+        solution_line = f"\n**Solution:** {solution}" if solution else ""
+        
         new_commit_entry = f"""
 ### {commit_hash} - {timestamp}
 **Summary:** {summary}
@@ -360,6 +371,9 @@ Branch created. No previous progress.
 **Approach:** {approach or "N/A"}
 **Status:** {status}
 **Performance:** {performance or "N/A"}
+{keywords_line}
+{error_fixed_line}
+{solution_line}
 """
         
         commit_file.write_text(existing_content + new_commit_entry)
