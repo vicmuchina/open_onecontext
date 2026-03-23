@@ -70,6 +70,31 @@ python3 scripts/chutes_json_benchmark.py \
 - `opencontext/docs/papers/GCC_Paper_2508.00031.md` - local copy/notes of the GCC paper reference.
 - `scripts/chutes_json_benchmark.py` - benchmark JSON compliance + tokens/sec across Chutes or any OpenAI-compatible models.
 
+## Latest Features (v2.1+)
+
+### Enhanced Commit Metadata
+Create searchable commits that help future sessions find similar solutions:
+
+```bash
+opencontext commit -m "Fixed proxy streaming error" \
+  -k "streaming, proxy, SSE, OutputTextDelta" \
+  -e "OutputTextDelta without active item" \
+  --solution "Don't increment itemIndex for thinking blocks"
+```
+
+- `-k, --keywords`: Searchable terms for future reference
+- `-e, --error-fixed`: The specific error message that was resolved
+- `--solution`: Brief description of how the fix works
+
+### 100% Confidence Watchman
+Watchman now requires 100% confidence before interrupting, dramatically reducing noise while maintaining enforcement precision.
+
+### Memory Assist with File Paths
+Memory assistance now provides direct file paths to read (e.g., `.GCC/branches/main/commit.md`) with specific commit hashes and keywords, instead of suggesting CLI commands.
+
+### Global GCC Fallback
+If no results found in project `.GCC`, the system searches `~/.GCC` (global memory) for relevant solutions from other projects.
+
 Quick install:
 
 ```bash

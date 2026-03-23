@@ -49,7 +49,20 @@ opencontext commit -m "Optimized database queries" \
   --approach "Query Optimization" \
   --status active \
   --performance "40% faster, all tests passing"
+
+# Enhanced commit with searchable metadata (v2.1+)
+opencontext commit -m "Fixed proxy streaming error" \
+  -k "streaming, proxy, SSE, OutputTextDelta" \
+  -e "OutputTextDelta without active item" \
+  --solution "Don't increment itemIndex for thinking blocks, only text blocks"
 ```
+
+**Enhanced Commit Metadata (v2.1+):**
+- `-k, --keywords`: Comma-separated searchable terms for future reference
+- `-e, --error-fixed`: The specific error message that was resolved
+- `--solution`: Brief description of how the fix works
+
+These commits create searchable memory that helps future sessions find similar solutions using `opencontext context --search`.
 
 **What it does:**
 - Records commit in commit.md with 3-block format
@@ -261,7 +274,18 @@ When OpenCode compacts context (Law Enforcer warns/intervenes):
 opencontext commit -m "Context compacted - checkpointing progress"
 ```
 
-### 5. Law Policy Operations
+### 5. Enhanced Commits for Searchability (v2.1+)
+After fixing bugs or solving complex issues:
+```bash
+opencontext commit -m "Fixed proxy streaming error" \
+  -k "streaming, proxy, SSE, OutputTextDelta" \
+  -e "OutputTextDelta without active item" \
+  --solution "Don't increment itemIndex for thinking blocks"
+```
+
+This creates searchable commits that help future sessions find similar solutions.
+
+### 6. Law Policy Operations
 Use project-local law policy for continuous workflow enforcement:
 ```bash
 opencontext law init
@@ -304,6 +328,12 @@ At 80% context usage:
 ### Research and MCP Discipline
 - Detects docs/GitHub/arXiv research signals and requires capture in GCC
 - Reminds/enforces MCP usage when tool patterns indicate relevance
+
+### Watchman Behavior (v2.1+)
+- **100% Confidence Required**: Watchman only interrupts when absolutely certain (confidence=1.0)
+- **Memory Assist with File Paths**: Provides direct file paths to read (e.g., `.GCC/branches/main/commit.md`) with specific commit hashes and keywords
+- **Global GCC Fallback**: Searches `~/.GCC` for cross-project solutions when project memory has no matches
+- **Reduced Noise**: Much fewer interruptions, only for true violations
 
 ## Troubleshooting
 
