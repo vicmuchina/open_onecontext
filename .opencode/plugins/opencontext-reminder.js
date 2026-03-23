@@ -25,10 +25,57 @@ const CONFIG = {
   logService: "opencontext.plugin",
   contextCacheMs: 15000,
   lawCacheMs: 5000,
+  modelMetadataCacheMs: 10 * 60 * 1000,
   maxRecentTools: 12,
   maxRecentToolExecutions: 24,
   maxSnippetChars: 1200,
 };
+
+// Success detection patterns for auto-commit suggestions
+const SUCCESS_PATTERNS = [
+  /tests?\s*(passed|succeeded|ok|✓)/i,
+  /\d+\s*(passed|succeeding)/i,
+  /✓\s*(passed|success|done|completed)/i,
+  /server\s*(started|running|listening)/i,
+  /successfully\s*(built|compiled|deployed|started)/i,
+  /build\s*(succeeded|passed|completed)/i,
+  /all\s*tests\s*pass/i,
+  /0\s*(failed|errors?|failing)/i,
+  /error[s]?\s*:\s*0/i,
+  /fixed\s*:/i,
+  /resolved\s*:/i,
+];
+
+const FAILURE_PATTERNS = [
+  /error[s]?\s*:/i,
+  /failed\s*:/i,
+  /exception/i,
+  /traceback/i,
+  /fatal/i,
+  /cannot\s*(find|read|write|open|connect)/i,
+];
+
+function detectSuccessFromOutput(output) {
+  if (!output || typeof output !== "string") return { success: false, reason: "" };
+  const outputLower = output.toLowerCase();
+  
+  // Check for failure patterns first
+  for (const pattern of FAILURE_PATTERNS) {
+    if (pattern.test(output)) {
+      return { success: false, reason: "failure_pattern_detected" };
+    }
+  }
+  
+  // Check for success patterns
+  for (const pattern of SUCCESS_PATTERNS) {
+    const match = output.match(pattern);
+    if (match) {
+      return { success: true, reason: match[0] };
+    }
+  }
+  
+  return { success: false, reason: "no_pattern" };
+}
 
 const DEFAULT_LAW = {
   version: 1,
@@ -84,6 +131,7 @@ const DEFAULT_LAW = {
     ],
     apiKeyEnv: "CHUTES_API_KEY",
     modelEnv: "OPENCONTEXT_LAW_MODEL_ID",
+    maxInputTokensOverride: 0,
     timeoutMs: 8000,
     maxTokensCritic: 120,
     maxTokensWatchman: 320,
@@ -98,7 +146,7 @@ const DEFAULT_LAW = {
     inspectOnIdle: false,
     skipDuringPlanningAgent: true,
     dedupeSameViolationUntilResolved: true,
-    minConfidence: 0.75,
+    minConfidence: 1.0,  // Changed from 0.75 - only interrupt when 100% confident
     requireModelDecision: true,
     systemPromptFile: "law-watchman-system.txt",
     includeRecentMessages: 12,
@@ -109,6 +157,27 @@ const DEFAULT_LAW = {
   observability: {
     traceEnabled: true,
     traceFile: "law-enforcer-trace.jsonl",
+  },
+  memoryAssist: {
+    enabled: true,
+    suggestOnly: true,
+    minSuggestConfidence: 0.82,
+    maxCandidates: 8,
+    maxSuggestions: 3,
+    triggers: ["assistant_turn"],
+    includeAbandonedWarnings: true,
+    cooldownSeconds: 120,
+    historyBudgetEnabled: true,
+    historyBudgetTargetFraction: 0.35,
+    historyBudgetMinFraction: 0.30,
+    historyBudgetMaxFraction: 0.40,
+    historyContextWindowFallbackTokens: 128000,
+    historyBudgetEstimateCharsPerToken: 4,
+    historyBudgetPerCandidateOverheadTokens: 24,
+    historyBudgetRecencyFraction: 0.5,
+    historyBudgetSemanticFraction: 0.5,
+    maxBudgetedCandidates: 160,
+    minBudgetedCandidates: 8,
   },
   custom: {
     enabled: true,
@@ -153,6 +222,10 @@ let runtimeConfigCache = {
   directory: "",
   data: null,
 };
+let modelMetadataCache = {
+  fetchedAt: 0,
+  items: {},
+};
 let mcpNamesCache = {
   fetchedAt: 0,
   data: [],
@@ -195,6 +268,36 @@ const WATCHMAN_RESPONSE_SCHEMA = {
         pendingCheckpointOverdue: {
           type: "string",
           enum: ["open", "clear", "keep"],
+        },
+      },
+    },
+    assist: {
+      type: "object",
+      additionalProperties: false,
+      required: ["should_suggest", "confidence", "reason", "suggestions"],
+      properties: {
+        should_suggest: { type: "boolean" },
+        confidence: { type: "number" },
+        reason: { type: "string" },
+        suggestions: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "why_now", "action", "memory_refs"],
+            properties: {
+              title: { type: "string" },
+              why_now: { type: "string" },
+              action: { type: "string" },
+              command: { type: "string" },
+              memory_refs: {
+                type: "array",
+                items: { type: "string" },
+              },
+              commit_hash: { type: "string" },
+              keywords: { type: "string" },
+            },
+          },
         },
       },
     },
@@ -256,6 +359,8 @@ function getSessionState(sessionId) {
       lastCompactionAt: 0,
       lastCommitAt: 0,
       lastContextRecoveryAt: 0,
+      lastMemoryAssistAt: 0,
+      lastMemoryAssistSignature: "",
     });
   }
   return sessionStateById.get(resolvedSessionId);
@@ -426,6 +531,39 @@ function findSemanticHistoryMatches(queryText, blocks, limit = 5) {
 
 function collectGccHistoryEvidence(directory, queryText = "") {
   const gccDir = join(directory, CONFIG.gccDir);
+  const globalGccDir = join(homedir(), ".GCC");
+  
+  // Collect from project GCC first
+  const projectResult = collectSingleGccEvidence(gccDir, "project", queryText);
+  
+  // Collect from global GCC as fallback
+  const globalResult = existsSync(globalGccDir) 
+    ? collectSingleGccEvidence(globalGccDir, "global", queryText)
+    : null;
+  
+  // If project has no results but global does, use global
+  if (!projectResult.available && globalResult?.available) {
+    return { ...globalResult, source: "global_fallback" };
+  }
+  
+  // If both have results, merge semantic matches (project first, then global)
+  if (projectResult.available && globalResult?.available) {
+    const projectMatches = projectResult.semanticMatches || [];
+    const globalMatches = (globalResult.semanticMatches || []).map(m => ({
+      ...m,
+      source: `global/${m.source}`,
+    }));
+    return {
+      ...projectResult,
+      semanticMatches: [...projectMatches, ...globalMatches.slice(0, 3)],
+      globalAvailable: true,
+    };
+  }
+  
+  return projectResult;
+}
+
+function collectSingleGccEvidence(gccDir, scope, queryText = "") {
   if (!existsSync(gccDir)) {
     return {
       available: false,
@@ -736,6 +874,14 @@ function sanitizeLaw(law) {
   if (!sanitized.critic.model || typeof sanitized.critic.model !== "string") {
     sanitized.critic.model = DEFAULT_LAW.critic.model;
   }
+  sanitized.critic.maxInputTokensOverride = Math.max(
+    0,
+    Math.round(
+      Number(
+        sanitized.critic.maxInputTokensOverride ?? DEFAULT_LAW.critic.maxInputTokensOverride
+      )
+    )
+  );
   sanitized.critic.model = sanitized.critic.model.trim() || DEFAULT_LAW.critic.model;
   const fallbackModels = normalizeStringArray(
     sanitized.critic.modelFallbacks,
@@ -808,6 +954,208 @@ function sanitizeLaw(law) {
   if (!Array.isArray(sanitized.research.docsKeywords)) {
     sanitized.research.docsKeywords = [...DEFAULT_LAW.research.docsKeywords];
   }
+  sanitized.memoryAssist =
+    sanitized.memoryAssist && typeof sanitized.memoryAssist === "object"
+      ? sanitized.memoryAssist
+      : {};
+  sanitized.memoryAssist.enabled = toBool(
+    sanitized.memoryAssist.enabled,
+    DEFAULT_LAW.memoryAssist.enabled
+  );
+  sanitized.memoryAssist.suggestOnly = toBool(
+    sanitized.memoryAssist.suggestOnly,
+    DEFAULT_LAW.memoryAssist.suggestOnly
+  );
+  sanitized.memoryAssist.minSuggestConfidence = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.memoryAssist.minSuggestConfidence
+          ?? DEFAULT_LAW.memoryAssist.minSuggestConfidence
+      )
+    )
+  );
+  sanitized.memoryAssist.maxCandidates = Math.max(
+    2,
+    Math.min(
+      20,
+      Math.round(
+        Number(sanitized.memoryAssist.maxCandidates ?? DEFAULT_LAW.memoryAssist.maxCandidates)
+      )
+    )
+  );
+  sanitized.memoryAssist.maxSuggestions = Math.max(
+    1,
+    Math.min(
+      8,
+      Math.round(
+        Number(sanitized.memoryAssist.maxSuggestions ?? DEFAULT_LAW.memoryAssist.maxSuggestions)
+      )
+    )
+  );
+  sanitized.memoryAssist.triggers = normalizeStringArray(
+    sanitized.memoryAssist.triggers,
+    DEFAULT_LAW.memoryAssist.triggers
+  )
+    .map(normalizeRuleTrigger)
+    .filter((value) => ["assistant_turn", "tool_call", "compaction", "idle"].includes(value));
+  if (sanitized.memoryAssist.triggers.length === 0) {
+    sanitized.memoryAssist.triggers = [...DEFAULT_LAW.memoryAssist.triggers];
+  }
+  sanitized.memoryAssist.includeAbandonedWarnings = toBool(
+    sanitized.memoryAssist.includeAbandonedWarnings,
+    DEFAULT_LAW.memoryAssist.includeAbandonedWarnings
+  );
+  sanitized.memoryAssist.cooldownSeconds = Math.max(
+    0,
+    Math.min(
+      3600,
+      Math.round(
+        Number(sanitized.memoryAssist.cooldownSeconds ?? DEFAULT_LAW.memoryAssist.cooldownSeconds)
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetEnabled = toBool(
+    sanitized.memoryAssist.historyBudgetEnabled,
+    DEFAULT_LAW.memoryAssist.historyBudgetEnabled
+  );
+  sanitized.memoryAssist.historyBudgetTargetFraction = Math.max(
+    0.05,
+    Math.min(
+      0.95,
+      Number(
+        sanitized.memoryAssist.historyBudgetTargetFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetTargetFraction
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetMinFraction = Math.max(
+    0.05,
+    Math.min(
+      0.95,
+      Number(
+        sanitized.memoryAssist.historyBudgetMinFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetMinFraction
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetMaxFraction = Math.max(
+    0.05,
+    Math.min(
+      0.95,
+      Number(
+        sanitized.memoryAssist.historyBudgetMaxFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetMaxFraction
+      )
+    )
+  );
+  if (sanitized.memoryAssist.historyBudgetMinFraction > sanitized.memoryAssist.historyBudgetMaxFraction) {
+    const swap = sanitized.memoryAssist.historyBudgetMinFraction;
+    sanitized.memoryAssist.historyBudgetMinFraction = sanitized.memoryAssist.historyBudgetMaxFraction;
+    sanitized.memoryAssist.historyBudgetMaxFraction = swap;
+  }
+  sanitized.memoryAssist.historyBudgetTargetFraction = Math.max(
+    sanitized.memoryAssist.historyBudgetMinFraction,
+    Math.min(
+      sanitized.memoryAssist.historyBudgetMaxFraction,
+      sanitized.memoryAssist.historyBudgetTargetFraction
+    )
+  );
+  sanitized.memoryAssist.historyContextWindowFallbackTokens = Math.max(
+    4096,
+    Math.min(
+      2_000_000,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.historyContextWindowFallbackTokens
+            ?? DEFAULT_LAW.memoryAssist.historyContextWindowFallbackTokens
+        )
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetEstimateCharsPerToken = Math.max(
+    1,
+    Math.min(
+      12,
+      Number(
+        sanitized.memoryAssist.historyBudgetEstimateCharsPerToken
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetEstimateCharsPerToken
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetPerCandidateOverheadTokens = Math.max(
+    0,
+    Math.min(
+      400,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.historyBudgetPerCandidateOverheadTokens
+            ?? DEFAULT_LAW.memoryAssist.historyBudgetPerCandidateOverheadTokens
+        )
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetRecencyFraction = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.memoryAssist.historyBudgetRecencyFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetRecencyFraction
+      )
+    )
+  );
+  sanitized.memoryAssist.historyBudgetSemanticFraction = Math.max(
+    0,
+    Math.min(
+      1,
+      Number(
+        sanitized.memoryAssist.historyBudgetSemanticFraction
+          ?? DEFAULT_LAW.memoryAssist.historyBudgetSemanticFraction
+      )
+    )
+  );
+  const splitTotal =
+    Number(sanitized.memoryAssist.historyBudgetRecencyFraction || 0)
+    + Number(sanitized.memoryAssist.historyBudgetSemanticFraction || 0);
+  if (splitTotal <= 0) {
+    sanitized.memoryAssist.historyBudgetRecencyFraction =
+      DEFAULT_LAW.memoryAssist.historyBudgetRecencyFraction;
+    sanitized.memoryAssist.historyBudgetSemanticFraction =
+      DEFAULT_LAW.memoryAssist.historyBudgetSemanticFraction;
+  } else {
+    sanitized.memoryAssist.historyBudgetRecencyFraction = Number(
+      (sanitized.memoryAssist.historyBudgetRecencyFraction / splitTotal).toFixed(4)
+    );
+    sanitized.memoryAssist.historyBudgetSemanticFraction = Number(
+      (sanitized.memoryAssist.historyBudgetSemanticFraction / splitTotal).toFixed(4)
+    );
+  }
+  sanitized.memoryAssist.maxBudgetedCandidates = Math.max(
+    4,
+    Math.min(
+      500,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.maxBudgetedCandidates
+            ?? DEFAULT_LAW.memoryAssist.maxBudgetedCandidates
+        )
+      )
+    )
+  );
+  sanitized.memoryAssist.minBudgetedCandidates = Math.max(
+    1,
+    Math.min(
+      sanitized.memoryAssist.maxBudgetedCandidates,
+      Math.round(
+        Number(
+          sanitized.memoryAssist.minBudgetedCandidates
+            ?? DEFAULT_LAW.memoryAssist.minBudgetedCandidates
+        )
+      )
+    )
+  );
   sanitized.research.capturePolicyFile =
     typeof sanitized.research.capturePolicyFile === "string" &&
     sanitized.research.capturePolicyFile.trim()
@@ -1064,16 +1412,24 @@ function defaultWatchmanSystemPrompt() {
     "Judge workflow-law compliance using provided law summary, policy text, agent guide, messages, tool calls, and debt flags.",
     "Return STRICT JSON only (no prose/markdown) matching schema fields exactly.",
     "You may return debt_updates to open/clear/keep checkpoint and compaction debt.",
-    "Critical behavior:",
+    "You may return assist suggestions when prior GCC memory can help the current task.",
+    "CRITICAL: Interruption requires 100% confidence (confidence=1.0).",
+    "- Only set violation=true with confidence=1.0 when you are absolutely certain.",
+    "- If you have ANY doubt, set violation=false and confidence < 1.0.",
+    "- Interruption is very expensive; err on the side of NOT interrupting.",
+    "When suggesting memory assistance:",
+    "- Provide specific commit hashes and file paths for the agent to read.",
+    "- Include keywords from the commit that will help the agent find relevant solutions.",
+    "- Tell the agent to use its own file reading tools to explore .GCC/ memory.",
+    "- Never suggest running opencontext CLI commands - the agent should read files directly.",
+    "Other behavior:",
     "- Do not request duplicate interruption for the exact same unresolved violation without new evidence.",
-    "- Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied before alerting again.",
+    "- Use recentInterruptions and postAlertActions to verify whether prior alerts were already satisfied.",
     "- For failed-attempt workflow, only flag violations for actionable implementation retries.",
-    "- Treat pure environment/setup/CLI-usage noise as non-actionable unless policy explicitly says otherwise.",
-    "- Interrupt only when there is a clear immediate corrective action the agent can perform.",
-    "- Do not interrupt read-only discovery/exploration (listing files, reading docs, checking help/usage) unless policy explicitly marks it actionable.",
-    "- Do not interrupt harmless command mistakes (wrong flag, missing optional tool, transient setup/network/dependency noise) unless repeated behavior clearly blocks implementation.",
-    "- Interruption is expensive; if evidence is ambiguous, prefer violation=false and lower confidence.",
-    "- For non-critical workflow issues, prefer persistent/repeated signals before interrupting.",
+    "- Treat pure environment/setup/CLI-usage noise as non-actionable.",
+    "- Do not interrupt read-only discovery/exploration.",
+    "- Do not interrupt harmless command mistakes unless repeated behavior clearly blocks implementation.",
+    "- Memory assistance is suggestion-only unless there is a true workflow-law violation.",
   ].join("\n");
 }
 
@@ -1808,6 +2164,14 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     recentDebtTransitions.map((entry) => `${entry.debt}:${entry.action}`).join("\n"),
   ]);
   const gccHistory = collectGccHistoryEvidence(directory, historyQuery);
+  const memoryAssistBudget = await resolveMemoryAssistBudget(client, law);
+  const memoryAssistSelection = buildMemoryAssistCandidates({
+    law,
+    state,
+    gccHistory,
+    budget: memoryAssistBudget,
+  });
+  const memoryAssistCandidates = memoryAssistSelection.candidates;
   return {
     sessionId,
     recentMessages: summarized,
@@ -1817,6 +2181,11 @@ async function collectWatchmanEvidence(client, law, state, directory) {
     postAlertActions,
     recentDebtTransitions,
     gccHistory,
+    memoryAssistCandidates,
+    memoryAssistBudget: {
+      ...memoryAssistBudget,
+      ...memoryAssistSelection.stats,
+    },
     debts: {
       pendingCompactionCheckpoint: state.pendingCompactionCheckpoint,
       pendingCheckpointOverdue: state.pendingCheckpointOverdue,
@@ -1889,6 +2258,28 @@ function buildLawSummaryForInspector(law) {
       includeRecentAlerts: law.watchman.includeRecentAlerts,
       includeRecentActionsAfterAlerts: law.watchman.includeRecentActionsAfterAlerts,
     },
+    memoryAssist: {
+      enabled: law.memoryAssist.enabled,
+      suggestOnly: law.memoryAssist.suggestOnly,
+      minSuggestConfidence: law.memoryAssist.minSuggestConfidence,
+      maxCandidates: law.memoryAssist.maxCandidates,
+      maxSuggestions: law.memoryAssist.maxSuggestions,
+      triggers: law.memoryAssist.triggers,
+      includeAbandonedWarnings: law.memoryAssist.includeAbandonedWarnings,
+      cooldownSeconds: law.memoryAssist.cooldownSeconds,
+      historyBudgetEnabled: law.memoryAssist.historyBudgetEnabled,
+      historyBudgetTargetFraction: law.memoryAssist.historyBudgetTargetFraction,
+      historyBudgetMinFraction: law.memoryAssist.historyBudgetMinFraction,
+      historyBudgetMaxFraction: law.memoryAssist.historyBudgetMaxFraction,
+      historyContextWindowFallbackTokens: law.memoryAssist.historyContextWindowFallbackTokens,
+      historyBudgetEstimateCharsPerToken: law.memoryAssist.historyBudgetEstimateCharsPerToken,
+      historyBudgetPerCandidateOverheadTokens:
+        law.memoryAssist.historyBudgetPerCandidateOverheadTokens,
+      historyBudgetRecencyFraction: law.memoryAssist.historyBudgetRecencyFraction,
+      historyBudgetSemanticFraction: law.memoryAssist.historyBudgetSemanticFraction,
+      maxBudgetedCandidates: law.memoryAssist.maxBudgetedCandidates,
+      minBudgetedCandidates: law.memoryAssist.minBudgetedCandidates,
+    },
     cliCapabilities: law.cliCapabilities || {},
     runtime: {
       criticConfigSources: law?.critic?.runtimeConfigSources || [],
@@ -1953,6 +2344,217 @@ function buildHistoryQueryFromState(state, extras = []) {
     if (text) parts.push(text);
   }
   return clipText(parts.join("\n\n"), 3000);
+}
+
+function inferMemoryCandidateType(snippet = "") {
+  const text = toLowerSafe(snippet);
+  if (
+    text.includes("abandon") ||
+    text.includes("rollback") ||
+    text.includes("regression") ||
+    text.includes("didn't work")
+  ) {
+    return "failed_attempt";
+  }
+  if (
+    text.includes("decide") ||
+    text.includes("decision") ||
+    text.includes("standard") ||
+    text.includes("constraint") ||
+    text.includes("must")
+  ) {
+    return "decision";
+  }
+  if (
+    text.includes("fix") ||
+    text.includes("resolved") ||
+    text.includes("pass") ||
+    text.includes("working")
+  ) {
+    return "prior_fix";
+  }
+  return "learning";
+}
+
+function extractCommitSummaryCandidates(commitText = "", limit = 6) {
+  const rows = [];
+  if (!commitText) return rows;
+  const re = /\*\*Summary:\*\*\s*(.+)/g;
+  let match;
+  let idx = 0;
+  while ((match = re.exec(commitText)) !== null && idx < limit) {
+    const summary = clipText(match[1] || "", 260);
+    if (!summary) continue;
+    rows.push({
+      source: ".GCC/branches/*/commit.md",
+      score: 0.2,
+      snippet: summary,
+    });
+    idx += 1;
+  }
+  return rows.slice(-Math.max(1, Number(limit || 1))).reverse();
+}
+
+function buildMemoryAssistCandidates({ law, state, gccHistory, budget }) {
+  const legacyMaxCandidates = Number(law?.memoryAssist?.maxCandidates || 8);
+  const semantic = Array.isArray(gccHistory?.semanticMatches) ? gccHistory.semanticMatches : [];
+  const commitFallback = extractCommitSummaryCandidates(gccHistory?.files?.commit || "", Math.max(
+    legacyMaxCandidates,
+    Number(law?.memoryAssist?.maxBudgetedCandidates || DEFAULT_LAW.memoryAssist.maxBudgetedCandidates)
+  ));
+  const merged = [...semantic, ...commitFallback];
+  const charsPerToken = Number(
+    budget?.charsPerToken ?? law?.memoryAssist?.historyBudgetEstimateCharsPerToken ?? 4
+  );
+  const overheadTokens = Number(
+    budget?.overheadTokens ?? law?.memoryAssist?.historyBudgetPerCandidateOverheadTokens ?? 24
+  );
+  const historyBudgetEnabled = budget?.enabled === true;
+  const recencyFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetRecencyFraction ?? 0.5),
+    0,
+    1
+  );
+  const semanticFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetSemanticFraction ?? 0.5),
+    0,
+    1
+  );
+  const splitTotal = recencyFraction + semanticFraction;
+  const normalizedRecencyFraction = splitTotal > 0 ? recencyFraction / splitTotal : 0.5;
+  const normalizedSemanticFraction = splitTotal > 0 ? semanticFraction / splitTotal : 0.5;
+  const maxBudgetedCandidates = Math.max(
+    1,
+    Number(law?.memoryAssist?.maxBudgetedCandidates || DEFAULT_LAW.memoryAssist.maxBudgetedCandidates)
+  );
+  const minBudgetedCandidates = Math.max(
+    1,
+    Math.min(
+      maxBudgetedCandidates,
+      Number(law?.memoryAssist?.minBudgetedCandidates || DEFAULT_LAW.memoryAssist.minBudgetedCandidates)
+    )
+  );
+  const targetBudgetTokens = historyBudgetEnabled
+    ? Math.max(0, Number(budget?.budgetTokens || 0))
+    : 0;
+  const recencyBudgetTokens = historyBudgetEnabled
+    ? Math.max(0, Math.floor(targetBudgetTokens * normalizedRecencyFraction))
+    : 0;
+  const semanticBudgetTokens = historyBudgetEnabled
+    ? Math.max(0, targetBudgetTokens - recencyBudgetTokens)
+    : 0;
+  const deduped = [];
+  const seen = new Set();
+  let index = 0;
+  let consumedEstimatedTokens = 0;
+
+  const stats = {
+    enabled: historyBudgetEnabled,
+    targetBudgetTokens,
+    recencyBudgetTokens,
+    semanticBudgetTokens,
+    recencyFraction: Number(normalizedRecencyFraction.toFixed(4)),
+    semanticFraction: Number(normalizedSemanticFraction.toFixed(4)),
+    consumedEstimatedTokens: 0,
+    consumedRecencyTokens: 0,
+    consumedSemanticTokens: 0,
+    selectedRecencyCandidates: 0,
+    selectedSemanticCandidates: 0,
+    selectedCandidates: 0,
+    maxBudgetedCandidates,
+    minBudgetedCandidates,
+    legacyMaxCandidates,
+  };
+
+  function tryAddCandidate(row, lane = "mixed", laneBudgetTokens = 0) {
+    const snippet = clipText(row?.snippet || "", 320);
+    if (!snippet) return false;
+    const source = String(row?.source || "");
+    const dedupeKey = `${source}::${snippet}`;
+    if (seen.has(dedupeKey)) return false;
+    const type = inferMemoryCandidateType(snippet);
+    const score = Number(row?.score ?? 0);
+    const commandHint = state?.pendingFailureLookup
+      ? 'opencontext context --search "<failure or fix topic>" --limit 20'
+      : 'opencontext context --search "<feature or decision>" --limit 20';
+    const candidate = {
+      id: `${source || "gcc"}:${index + 1}`,
+      source,
+      type,
+      score: Number.isFinite(score) ? Number(score.toFixed(3)) : 0,
+      summary: snippet,
+      command_hint: commandHint,
+      memory_ref: source || ".GCC",
+    };
+    const estimatedTokens = estimateTokensFromText(snippet, charsPerToken, overheadTokens);
+    const laneConsumed = lane === "semantic"
+      ? stats.consumedSemanticTokens
+      : lane === "recency"
+        ? stats.consumedRecencyTokens
+        : stats.consumedEstimatedTokens;
+    const withinBudget = !historyBudgetEnabled
+      || targetBudgetTokens <= 0
+      || consumedEstimatedTokens + estimatedTokens <= targetBudgetTokens;
+    const withinLaneBudget = !historyBudgetEnabled
+      || laneBudgetTokens <= 0
+      || laneConsumed + estimatedTokens <= laneBudgetTokens;
+    if (withinBudget || deduped.length < minBudgetedCandidates) {
+      if (withinLaneBudget || deduped.length < minBudgetedCandidates) {
+        deduped.push(candidate);
+        seen.add(dedupeKey);
+        consumedEstimatedTokens += estimatedTokens;
+        stats.consumedEstimatedTokens += estimatedTokens;
+        if (lane === "semantic") {
+          stats.consumedSemanticTokens += estimatedTokens;
+          stats.selectedSemanticCandidates += 1;
+        } else if (lane === "recency") {
+          stats.consumedRecencyTokens += estimatedTokens;
+          stats.selectedRecencyCandidates += 1;
+        }
+        stats.selectedCandidates = deduped.length;
+      }
+    }
+    index += 1;
+    return true;
+  }
+
+  if (historyBudgetEnabled) {
+    for (const row of commitFallback) {
+      if (deduped.length >= maxBudgetedCandidates) break;
+      tryAddCandidate(row, "recency", recencyBudgetTokens);
+      if (targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens && deduped.length >= minBudgetedCandidates) {
+        break;
+      }
+    }
+
+    for (const row of semantic) {
+      if (deduped.length >= maxBudgetedCandidates) break;
+      tryAddCandidate(row, "semantic", semanticBudgetTokens);
+      if (targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens && deduped.length >= minBudgetedCandidates) {
+        break;
+      }
+    }
+
+    const overflowRows = [...semantic, ...commitFallback].sort(
+      (a, b) => Number(b?.score || 0) - Number(a?.score || 0)
+    );
+    for (const row of overflowRows) {
+      if (deduped.length >= maxBudgetedCandidates) break;
+      tryAddCandidate(row, "mixed", 0);
+      if (targetBudgetTokens > 0 && consumedEstimatedTokens >= targetBudgetTokens && deduped.length >= minBudgetedCandidates) {
+        break;
+      }
+    }
+  } else {
+    for (const row of merged) {
+      if (deduped.length >= legacyMaxCandidates) break;
+      tryAddCandidate(row, "mixed", 0);
+    }
+  }
+  return {
+    candidates: deduped,
+    stats,
+  };
 }
 
 function shouldInspectCustomRuleForTrigger(rule, trigger) {
@@ -2233,6 +2835,199 @@ function resolveCriticEndpoint(law) {
   return `${baseUrl}${endpointPath}`;
 }
 
+function resolveCriticBaseUrl(law) {
+  return String(law?.critic?.baseUrl || DEFAULT_LAW.critic.baseUrl).replace(/\/+$/, "");
+}
+
+function buildEndpointCandidates(baseUrl, path) {
+  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const cleanPath = `/${String(path || "").replace(/^\/+/, "")}`;
+  const candidates = [`${cleanBase}${cleanPath}`];
+  if (!cleanBase.endsWith("/v1") && !cleanBase.includes("/v1/")) {
+    candidates.push(`${cleanBase}/v1${cleanPath}`);
+  }
+  if (cleanBase.endsWith("/v1")) {
+    const root = cleanBase.slice(0, -3).replace(/\/+$/, "");
+    if (root) candidates.push(`${root}${cleanPath}`);
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const url of candidates) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    deduped.push(url);
+  }
+  return deduped;
+}
+
+function normalizeModelIdentifier(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function extractModelRowsFromPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.models)) return payload.models;
+  return [];
+}
+
+function coercePositiveNumber(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n);
+}
+
+function extractModelMaxInputTokens(modelRow) {
+  if (!modelRow || typeof modelRow !== "object") return 0;
+  const candidates = [
+    modelRow.max_input_tokens,
+    modelRow.max_prompt_tokens,
+    modelRow.context_window,
+    modelRow.context_length,
+    modelRow.max_context_length,
+    modelRow.input_token_limit,
+    modelRow?.limits?.max_input_tokens,
+    modelRow?.limits?.max_prompt_tokens,
+    modelRow?.limits?.context_window,
+    modelRow?.capabilities?.max_input_tokens,
+    modelRow?.capabilities?.context_window,
+  ];
+  for (const value of candidates) {
+    const parsed = coercePositiveNumber(value);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function estimateTokensFromText(text, charsPerToken = 4, overheadTokens = 24) {
+  const bodyChars = String(text || "").length;
+  const perToken = Math.max(1, Number(charsPerToken || 4));
+  const estimatedBody = Math.ceil(bodyChars / perToken);
+  const overhead = Math.max(0, Number(overheadTokens || 0));
+  return Math.max(1, estimatedBody + overhead);
+}
+
+function clampNumber(value, minValue, maxValue) {
+  return Math.max(minValue, Math.min(maxValue, value));
+}
+
+async function resolveWatchmanModelInputTokens(client, law) {
+  const model = resolveCriticModel(law);
+  const override = coercePositiveNumber(law?.critic?.maxInputTokensOverride);
+  if (override > 0) {
+    return {
+      tokens: override,
+      model,
+      source: "override",
+      metadataUrl: "",
+    };
+  }
+
+  const baseUrl = resolveCriticBaseUrl(law);
+  const cacheKey = `${baseUrl}::${model}`;
+  if (Date.now() - modelMetadataCache.fetchedAt <= CONFIG.modelMetadataCacheMs) {
+    const cached = modelMetadataCache.items?.[cacheKey];
+    if (cached && coercePositiveNumber(cached.tokens) > 0) {
+      return cached;
+    }
+  }
+
+  const fallbackTokens = coercePositiveNumber(
+    law?.memoryAssist?.historyContextWindowFallbackTokens
+  ) || DEFAULT_LAW.memoryAssist.historyContextWindowFallbackTokens;
+  const fallback = {
+    tokens: fallbackTokens,
+    model,
+    source: "fallback_128k",
+    metadataUrl: "",
+  };
+
+  if (!law?.critic?.enabled) return fallback;
+  const { apiKey } = resolveCriticApiKey(law);
+  const headers = buildCriticHeaders(law, apiKey);
+  const modelUrls = buildEndpointCandidates(baseUrl, "/models");
+  let resolved = null;
+  for (const url of modelUrls) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers,
+      });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const rows = extractModelRowsFromPayload(payload);
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      const normalizedModel = normalizeModelIdentifier(model);
+      const exact = rows.find((row) => normalizeModelIdentifier(row?.id) === normalizedModel);
+      const contains = exact || rows.find((row) => {
+        const rowId = normalizeModelIdentifier(row?.id);
+        return rowId && normalizedModel && rowId.includes(normalizedModel);
+      });
+      const tokenCount = extractModelMaxInputTokens(contains || rows[0]);
+      if (tokenCount <= 0) continue;
+      resolved = {
+        tokens: tokenCount,
+        model,
+        source: "model_metadata",
+        metadataUrl: url,
+      };
+      break;
+    } catch {
+      // Ignore metadata lookup errors; fallback is intentional.
+    }
+  }
+
+  const result = resolved || fallback;
+  modelMetadataCache.fetchedAt = Date.now();
+  modelMetadataCache.items = {
+    ...(modelMetadataCache.items || {}),
+    [cacheKey]: result,
+  };
+  return result;
+}
+
+async function resolveMemoryAssistBudget(client, law) {
+  const budgetEnabled = law?.memoryAssist?.historyBudgetEnabled !== false;
+  const budgetTargetFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetTargetFraction ?? DEFAULT_LAW.memoryAssist.historyBudgetTargetFraction),
+    0.05,
+    0.95
+  );
+  const minFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetMinFraction ?? DEFAULT_LAW.memoryAssist.historyBudgetMinFraction),
+    0.05,
+    0.95
+  );
+  const maxFraction = clampNumber(
+    Number(law?.memoryAssist?.historyBudgetMaxFraction ?? DEFAULT_LAW.memoryAssist.historyBudgetMaxFraction),
+    0.05,
+    0.95
+  );
+  const lower = Math.min(minFraction, maxFraction);
+  const upper = Math.max(minFraction, maxFraction);
+  const target = clampNumber(budgetTargetFraction, lower, upper);
+  const modelWindow = await resolveWatchmanModelInputTokens(client, law);
+  const contextWindowTokens = coercePositiveNumber(modelWindow?.tokens)
+    || DEFAULT_LAW.memoryAssist.historyContextWindowFallbackTokens;
+  const budgetTokens = budgetEnabled
+    ? Math.max(256, Math.floor(contextWindowTokens * target))
+    : 0;
+  return {
+    enabled: budgetEnabled,
+    model: modelWindow?.model || resolveCriticModel(law),
+    source: modelWindow?.source || "fallback_128k",
+    metadataUrl: modelWindow?.metadataUrl || "",
+    contextWindowTokens,
+    targetFraction: target,
+    minFraction: lower,
+    maxFraction: upper,
+    budgetTokens,
+    charsPerToken: Number(law?.memoryAssist?.historyBudgetEstimateCharsPerToken ?? 4),
+    overheadTokens: Number(law?.memoryAssist?.historyBudgetPerCandidateOverheadTokens ?? 24),
+  };
+}
+
 function buildCriticHeaders(law, apiKey) {
   const headers = {
     "content-type": "application/json",
@@ -2471,6 +3266,50 @@ function extractWatchmanDebtUpdates(parsed) {
   return {
     pendingCompactionCheckpoint: normalizeDebtUpdateAction(raw.pendingCompactionCheckpoint),
     pendingCheckpointOverdue: normalizeDebtUpdateAction(raw.pendingCheckpointOverdue),
+  };
+}
+
+function normalizeAssistSuggestion(raw) {
+  const item = raw && typeof raw === "object" ? raw : {};
+  const refs = Array.isArray(item.memory_refs)
+    ? item.memory_refs.map((entry) => String(entry || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  return {
+    title: clipText(item.title || "Memory insight", 120),
+    whyNow: clipText(item.why_now || "", 220),
+    action: clipText(item.action || "", 220),
+    command: clipText(item.command || "", 180),
+    memoryRefs: refs,
+    commitHash: clipText(item.commit_hash || "", 20),
+    keywords: clipText(item.keywords || "", 200),
+  };
+}
+
+function extractWatchmanAssist(parsed, law) {
+  const assist = parsed?.assist;
+  if (!assist || typeof assist !== "object") {
+    return {
+      shouldSuggest: false,
+      confidence: 0,
+      reason: "",
+      suggestions: [],
+    };
+  }
+  const rawSuggestions = Array.isArray(assist.suggestions) ? assist.suggestions : [];
+  const maxSuggestions = Math.max(
+    1,
+    Number(law?.memoryAssist?.maxSuggestions || DEFAULT_LAW.memoryAssist.maxSuggestions)
+  );
+  const suggestions = rawSuggestions
+    .map(normalizeAssistSuggestion)
+    .filter((entry) => entry.action || entry.whyNow || entry.command)
+    .slice(0, maxSuggestions);
+  const confidence = Number(assist.confidence ?? 0);
+  return {
+    shouldSuggest: assist.should_suggest === true && suggestions.length > 0,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    reason: clipText(assist.reason || "", 320),
+    suggestions,
   };
 }
 
@@ -2908,6 +3747,7 @@ async function runWatchmanCheck(client, law, payload) {
     const confidence = Number(parsed?.confidence ?? 0);
     const debtUpdates = extractWatchmanDebtUpdates(parsed);
     const satisfactionEvidence = clipText(parsed?.satisfaction_evidence || "", 600);
+    const assist = extractWatchmanAssist(parsed, law);
     return {
       available: true,
       violation,
@@ -2918,6 +3758,7 @@ async function runWatchmanCheck(client, law, payload) {
       confidence: Number.isFinite(confidence) ? confidence : 0,
       debtUpdates,
       satisfactionEvidence,
+      assist,
       model: result.modelUsed || primaryModel,
       responseFormat: result.responseFormat || "",
       apiKeyEnv: sourceEnv,
@@ -3104,6 +3945,107 @@ function applyWatchmanDebtUpdates(state, debtUpdates, ruleName = "") {
     }
   }
   recomputeViolationDebt(state);
+}
+
+function buildMemoryAssistPrompt(assist, directory = "") {
+  const suggestions = Array.isArray(assist?.suggestions) ? assist.suggestions : [];
+  const lines = [
+    "OpenContext Memory Assist:",
+  ];
+  if (assist?.reason) {
+    lines.push(`Reason: ${assist.reason}`);
+  }
+  for (const [index, item] of suggestions.entries()) {
+    lines.push("");
+    lines.push(`${index + 1}. ${item.title || "Relevant prior memory"}`);
+    if (item.whyNow) lines.push(`Why now: ${item.whyNow}`);
+    if (item.action) lines.push(`Action: ${item.action}`);
+    // Provide direct file paths for agent to read using its own tools
+    if (Array.isArray(item.memoryRefs) && item.memoryRefs.length > 0) {
+      const gccBase = directory ? `${directory}/.GCC` : ".GCC";
+      lines.push(`GCC files to read:`);
+      for (const ref of item.memoryRefs) {
+        lines.push(`  - ${gccBase}/${ref}`);
+      }
+    }
+    if (item.commitHash) {
+      lines.push(`Look for commit: ${item.commitHash}`);
+    }
+    if (item.keywords) {
+      lines.push(`Search keywords: ${item.keywords}`);
+    }
+  }
+  lines.push("");
+  lines.push("Use your file reading tools to explore GCC memory for relevant context.");
+  return lines.join("\n");
+}
+
+async function maybeSuggestMemoryAssist({
+  client,
+  directory,
+  law,
+  state,
+  trigger,
+  verdict,
+  evidence,
+}) {
+  if (!law?.memoryAssist?.enabled) return false;
+  if (law?.memoryAssist?.suggestOnly === false) {
+    // v1 behavior keeps memory assistance non-interrupting even if suggestOnly is disabled.
+    // This flag is reserved for future escalation modes.
+  }
+  if (!Array.isArray(law?.memoryAssist?.triggers) || !law.memoryAssist.triggers.includes(trigger)) {
+    return false;
+  }
+  const assist = verdict?.assist;
+  if (!assist?.shouldSuggest) return false;
+  const confidence = Number(assist?.confidence ?? 0);
+  const minConfidence = Number(law?.memoryAssist?.minSuggestConfidence ?? 0.82);
+  if (!Number.isFinite(confidence) || confidence < minConfidence) return false;
+  if (!Array.isArray(assist?.suggestions) || assist.suggestions.length === 0) return false;
+
+  const now = Date.now();
+  const cooldownMs = Math.max(0, Number(law?.memoryAssist?.cooldownSeconds || 0) * 1000);
+  if (cooldownMs > 0 && now - Number(state?.lastMemoryAssistAt || 0) < cooldownMs) {
+    return false;
+  }
+
+  const signature = assist.suggestions
+    .map((item) => `${item.title}|${item.action}|${(item.memoryRefs || []).join(",")}`)
+    .join("||");
+  if (signature && signature === state?.lastMemoryAssistSignature) {
+    return false;
+  }
+
+  const promptText = buildMemoryAssistPrompt(assist);
+  const injected = await injectContinuation(client, directory, state, promptText);
+  if (!injected) return false;
+
+  state.lastMemoryAssistAt = now;
+  state.lastMemoryAssistSignature = signature;
+  await appendLawTrace(client, directory, law, {
+    type: "memory_assist.suggested",
+    sessionId: state.sessionId,
+    trigger,
+    confidence,
+    minConfidence,
+    reason: assist.reason || "",
+    suggestions: assist.suggestions,
+    topCandidateSources: (evidence?.memoryAssistCandidates || []).slice(0, 3).map((row) => row.source || ""),
+  });
+  await log(client, "info", "law.memory_assist.suggested", {
+    sessionId: state.sessionId,
+    trigger,
+    confidence,
+    minConfidence,
+    suggestions: assist.suggestions.length,
+  });
+  await toast(client, {
+    type: "info",
+    timeout: 7000,
+    message: `🧠 OpenContext memory assist suggested ${assist.suggestions.length} prior insight(s).`,
+  });
+  return true;
 }
 
 function shouldHardInterruptCustomRule(law, violationCount, ruleSpecificThreshold = null) {
@@ -3359,6 +4301,42 @@ function buildModelDebtCandidates({ law, state, trigger, hasGCC }) {
   return candidates;
 }
 
+async function suggestEnhancedCommit({ client, directory, state, toolOutput, commandText }) {
+  // This function prompts the agent to commit with enhanced metadata after a successful operation
+  // The watchman will judge if this is appropriate based on LLM analysis
+  if (!state || state.lastCommitPromptAt) {
+    // Cooldown to avoid repeated prompts
+    const lastPrompt = state.lastCommitPromptAt || 0;
+    if (Date.now() - lastPrompt < 60000) return false; // 1 minute cooldown
+  }
+  
+  // Only suggest if there's been meaningful work
+  if (state.toolExecutionCount < 3) return false;
+  
+  const prompt = [
+    "OpenContext Checkpoint Suggestion:",
+    "",
+    "A successful operation was detected. Consider creating a checkpoint with enhanced metadata:",
+    "",
+    "Run: opencontext commit -m \"<summary>\" --keywords \"<searchable terms>\" --error-fixed \"<error if fixed>\" --solution \"<how it was solved>\"",
+    "",
+    "Example:",
+    "  opencontext commit -m \"Fixed proxy streaming error\" -k \"streaming, proxy, SSE\" -e \"OutputTextDelta without active item\" --solution \"Don't increment itemIndex for thinking blocks\"",
+    "",
+    "This helps future sessions find similar solutions.",
+  ].join("\n");
+  
+  state.lastCommitPromptAt = Date.now();
+  await appendLawTrace(client, directory, {}, {
+    type: "success_commit_prompt",
+    sessionId: state.sessionId,
+    toolOutput: clipText(toolOutput, 500),
+    commandText: clipText(commandText, 200),
+  });
+  
+  return prompt;
+}
+
 async function evaluateAndEnforce({
   client,
   directory,
@@ -3501,6 +4479,8 @@ async function evaluateAndEnforce({
       recentMessages: evidence.recentMessages,
       recentToolCalls: evidence.recentToolCalls,
       gccHistory: evidence.gccHistory,
+      memoryAssistCandidates: evidence.memoryAssistCandidates,
+      memoryAssistBudget: evidence.memoryAssistBudget,
       debts: evidence.debts,
       customRuleCounters: state.customRuleViolations,
       deterministicCandidates: [...violations, ...modelDebtCandidates].map((violation) => ({
@@ -3527,6 +4507,15 @@ async function evaluateAndEnforce({
           currentBranch: evidence?.gccHistory?.currentBranch || "",
           semanticMatches: (evidence?.gccHistory?.semanticMatches || []).slice(0, 3),
         },
+        memoryAssistCandidates: (evidence?.memoryAssistCandidates || []).slice(
+          0,
+          Number(
+            law?.memoryAssist?.historyBudgetEnabled
+              ? law?.memoryAssist?.maxBudgetedCandidates || 160
+              : law?.memoryAssist?.maxCandidates || 8
+          )
+        ),
+        memoryAssistBudget: evidence?.memoryAssistBudget || {},
         debts: evidence.debts,
         customRuleCounters: state.customRuleViolations,
         lawPolicyText: clipText(law?.custom?.policyText || "", 1200),
@@ -3561,6 +4550,8 @@ async function evaluateAndEnforce({
       attempts: verdict.attempts || 1,
       debtUpdates: verdict.debtUpdates || {},
       satisfactionEvidence: verdict.satisfactionEvidence || "",
+      assistSuggested: Boolean(verdict?.assist?.shouldSuggest),
+      assistConfidence: Number(verdict?.assist?.confidence ?? 0),
     });
 
     applyWatchmanDebtUpdates(state, verdict?.debtUpdates, verdict?.rule || "");
@@ -3593,6 +4584,17 @@ async function evaluateAndEnforce({
           confidence,
           minConfidence,
           rule: verdict.rule || "",
+        });
+      }
+      if (verdict.available) {
+        await maybeSuggestMemoryAssist({
+          client,
+          directory,
+          law,
+          state,
+          trigger,
+          verdict,
+          evidence,
         });
       }
       const allowPolicyFallback = !verdict.available && !law?.watchman?.requireModelDecision;
@@ -3740,25 +4742,12 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           });
           return;
         }
-        const compactionMode = normalizeDebtJudgeMode(
-          law?.gcc?.compactionDebtJudgeMode,
-          DEFAULT_LAW.gcc.compactionDebtJudgeMode
-        );
-        if (compactionMode === "model_only") {
-          await toast(client, {
-            message:
-              "⚠️ Context compacted.\nLaw Enforcer is evaluating recovery needs from recent actions/history.",
-            type: "info",
-            timeout: 9000,
-          });
-        } else {
-          await toast(client, {
-            message:
-              "⚠️ Context compacted.\nCheckpoint now: opencontext commit \"<summary>\"\nThen recover details with: opencontext context --log --lines 80",
-            type: "warning",
-            timeout: 10000,
-          });
-        }
+        await toast(client, {
+          message:
+            "⚠️ Context compacted.\nLaw Enforcer is evaluating recovery needs from recent actions/history.",
+          type: "info",
+          timeout: 9000,
+        });
 
         if (state) {
           await evaluateAndEnforce({
@@ -3804,11 +4793,6 @@ export const OpenContextPlugin = async ({ client, directory }) => {
               contextPercent,
               messageUpdateCount,
             });
-            await toast(client, {
-              message: `📊 Context usage: ${contextPercent}%\nConsider: opencontext commit "<summary>"`,
-              type: "info",
-              timeout: 8000,
-            });
           }
         }
 
@@ -3831,7 +4815,7 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       if (event.type === "session.idle" && state) {
         await log(client, "debug", "event session.idle", { toolExecutionCount: state.toolExecutionCount });
         const hasGCC = isGCCInitialized(directory);
-        const interrupted = await evaluateAndEnforce({
+        await evaluateAndEnforce({
           client,
           directory,
           law,
@@ -3843,13 +4827,6 @@ export const OpenContextPlugin = async ({ client, directory }) => {
           hasGCC,
         });
 
-        if (!interrupted && hasGCC && state.toolExecutionCount > 2) {
-          await toast(client, {
-            message: `⏸️ Session idle after ${state.toolExecutionCount} actions.\nConsider: opencontext commit "Session checkpoint"`,
-            type: "info",
-            timeout: 8000,
-          });
-        }
       }
     },
 
@@ -3857,15 +4834,9 @@ export const OpenContextPlugin = async ({ client, directory }) => {
       const law = await loadLaw(client, directory);
       await log(client, "debug", "hook experimental.session.compacting");
       const hasGCC = isGCCInitialized(directory);
-      const compactionMode = normalizeDebtJudgeMode(
-        law?.gcc?.compactionDebtJudgeMode,
-        DEFAULT_LAW.gcc.compactionDebtJudgeMode
-      );
 
       const reminder = hasGCC
-        ? compactionMode === "model_only"
-          ? `OpenContext Law Enforcer: context is being compacted. Recovery obligations will be judged from recent actions/history. Preserve progress and follow any recovery prompt if issued. Mode=${law.mode}.`
-          : `OpenContext Law Enforcer: context is being compacted. Required: \`opencontext commit "<summary>"\`, then \`opencontext context --log --lines 80\`. Mode=${law.mode}.`
+        ? `OpenContext Law Enforcer: context is being compacted. Recovery obligations are judged from recent actions/history. Follow watchman correction prompts when issued. Mode=${law.mode}.`
         : 'OpenContext Law Enforcer: GCC is not initialized. Run `opencontext init --project-name "<name>" --goal "<goal>"` before continuing long tasks.';
       output.context = Array.isArray(output.context) ? output.context : [];
       output.context.push(reminder);
@@ -4309,15 +5280,6 @@ export const OpenContextPlugin = async ({ client, directory }) => {
         hasGCC,
       });
 
-      if (!interrupted && state.toolExecutionCount % law.gcc.requireCheckpointEveryTools === 0) {
-        if (hasGCC) {
-          await toast(client, {
-            message: `🎯 ${state.toolExecutionCount} actions completed.\nCheckpoint now:\nopencontext commit "Checkpoint progress"`,
-            type: "info",
-            timeout: 8000,
-          });
-        }
-      }
     },
   };
 };
