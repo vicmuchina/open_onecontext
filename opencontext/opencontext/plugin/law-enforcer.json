@@ -133,7 +133,7 @@
   },
   "agentGuide": {
     "path": ".GCC/AGENT_GUIDE.txt",
-    "includeInWatchmanPayload": true
+    "includeInWatchmanPayload": false
   },
   "memoryAssist": {
     "enabled": true,
