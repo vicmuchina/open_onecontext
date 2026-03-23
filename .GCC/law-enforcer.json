@@ -62,7 +62,8 @@
     "inspectOnIdle": false,
     "skipDuringPlanningAgent": true,
     "includeRecentMessages": 12,
-    "includeRecentToolCalls": 12
+    "includeRecentToolCalls": 12,
+    "minConfidence": 1.0
   },
   "observability": {
     "traceEnabled": true,
@@ -147,8 +148,8 @@
     "cooldownSeconds": 120,
     "historyBudgetEnabled": true,
     "historyBudgetTargetFraction": 0.35,
-    "historyBudgetMinFraction": 0.30,
-    "historyBudgetMaxFraction": 0.40,
+    "historyBudgetMinFraction": 0.3,
+    "historyBudgetMaxFraction": 0.4,
     "historyContextWindowFallbackTokens": 128000,
     "historyBudgetEstimateCharsPerToken": 4,
     "historyBudgetPerCandidateOverheadTokens": 24,

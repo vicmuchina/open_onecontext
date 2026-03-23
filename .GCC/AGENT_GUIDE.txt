@@ -327,3 +327,35 @@ Installation and Repair
 
 Regenerate This Guide
 - Run: opencontext law guide
+
+
+## Enhanced Commit Metadata
+
+When creating checkpoints after fixing issues, use the enhanced commit options:
+
+```bash
+opencontext commit -m "Fixed proxy streaming error" \
+  -k "streaming, proxy, SSE, OutputTextDelta" \
+  -e "OutputTextDelta without active item" \
+  --solution "Don't increment itemIndex for thinking blocks, only text blocks"
+```
+
+This creates searchable commits that help future sessions find similar solutions:
+- `-k, --keywords`: Comma-separated searchable terms
+- `-e, --error-fixed`: The specific error message that was resolved
+- `--solution`: Brief description of how the fix works
+
+## Watchman Behavior Changes
+
+1. **100% Confidence Required**: Watchman only interrupts when it is 100% confident (confidence=1.0). If there is ANY doubt, it will not interrupt.
+
+2. **Memory Assistance Uses File Paths**: When watchman suggests checking GCC memory, it provides:
+   - Direct file paths to read (e.g., `.GCC/branches/main/commit.md`)
+   - Specific commit hashes to look for
+   - Keywords to search for
+   
+   Use your file reading tools to explore GCC memory directly. Do NOT run `opencontext context --search` commands - read the files yourself.
+
+3. **Global GCC Fallback**: If no results found in project `.GCC`, the system also searches `~/.GCC` (global memory) for relevant solutions from other projects.
+
+4. **Reduced Interruptions**: The minConfidence threshold is now 1.0, meaning watchman will only interrupt when absolutely certain of a violation.
